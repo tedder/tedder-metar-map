@@ -7,42 +7,47 @@ print("hello")
 import time
 
 try:
-  import adafruit_requests
+    import adafruit_requests
 except ModuleNotFoundError:
-  import requests
-  class adafruit_requests(object):
-    @staticmethod
-    def Session(pool, ssl_context):
-      return requests.session()
-try:
-  from adafruit_datetime import datetime
-except ModuleNotFoundError:
-  from datetime import datetime
+    import requests
+
+    class adafruit_requests(object):
+        @staticmethod
+        def Session(pool, ssl_context):
+            return requests.session()
+
 
 try:
-  import storage
-  import usb_cdc
+    from adafruit_datetime import datetime
 except ModuleNotFoundError:
-  pass
+    from datetime import datetime
 
 try:
-  import board
-  import neopixel
-  import wifi
-  import socketpool
-  import adafruit_httpserver
-  from adafruit_httpserver import GET, POST
-except NotImplementedError: 
-  class socketpool(object):
-    @staticmethod
-    def SocketPool(wifi_radio):
-      return
-  #from fakes import adafruit_httpserver
-  #from fakes import GET, POST
-  #from fakes import wifi
-  from fakes import *
+    import storage
+    import usb_cdc
+except ModuleNotFoundError:
+    pass
 
-  pass
+try:
+    import board
+    import neopixel
+    import wifi
+    import socketpool
+    import adafruit_httpserver
+    from adafruit_httpserver import GET, POST
+except NotImplementedError:
+
+    class socketpool(object):
+        @staticmethod
+        def SocketPool(wifi_radio):
+            return
+
+    # from fakes import adafruit_httpserver
+    # from fakes import GET, POST
+    # from fakes import wifi
+    from fakes import *
+
+    pass
 
 
 import ssl
