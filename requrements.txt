@@ -1,0 +1,5 @@
+# for linux/osxish computers
+adafruit_circuitpython_requests
+adafruit-circuitpython-neopixel
+adafruit-blinka
+adafruit-platformdetect
