@@ -25,3 +25,12 @@ The v1 hardware for this is about $25 ($10ish for the carrier board, $12 for the
 ## how to build
 
 ## how to install
+
+## troubleshooting
+
+[circuitpython boot states](https://docs.circuitpython.org/en/8.2.x/README.html#:~:text=RGB%20status%20LED%20indicating%20CircuitPython%20state.):
+* One green flash - code completed without error.
+* Two red flashes - code ended due to an exception.
+* Three yellow flashes - safe mode. May be due to CircuitPython internal error.
+
+
