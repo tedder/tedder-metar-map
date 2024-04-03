@@ -19,7 +19,7 @@ import ssl
 import os
 import gc
 
-TMM_VERSION = "v1.1.2"
+TMM_VERSION = "v1.1.5"
 WEB_PORT = 80
 if sys.implementation.name.lower() == "cpython":
     from fakes import *
@@ -113,6 +113,8 @@ def get_now_struct():
         return ntp.datetime
     except socketpool.SocketPool.gaierror as ex:
         pass
+    except OSError as ex:
+        pass
     return
 
 
@@ -132,40 +134,57 @@ def phone_home():
         return
 
     now_epoch = get_now()
-    if last_phone_home and (now_epoch - last_phone_home) < 3600:
+    if last_phone_home and now_epoch and (now_epoch - last_phone_home) < 3600:
         return
     else:
         last_phone_home = now_epoch
 
     try:
-        # ret =
-        # requests.post(
+        #ret =
+        #requests.post(
         #    "https://api.tedder.me/metar-map/status",
-        # data=f"""board_uid={str(microcontroller.Processor.uid)} version={TMM_VERSION}"""
-        # ",
-        # "airportlist": airportlist,
-        # "airportwx": airportwx,
-        # "ledstate": ledstate,
-        # "errors": errors,
-        # "ip": wifi.radio.ipv4_address,
-        # "board_id": board.board_id,
-        # )
-        # print("post ret: ", ret)
+            # data=f"""board_uid={str(microcontroller.Processor.uid)} version={TMM_VERSION}"""
+            # ",
+            # "airportlist": airportlist,
+            # "airportwx": airportwx,
+            # "ledstate": ledstate,
+            # "errors": errors,
+            # "ip": wifi.radio.ipv4_address,
+            # "board_id": board.board_id,
+        #)
+        #print("post ret: ", ret)
         pass
     except Exception as ex:
         print("phonehome failed", ex)
         pass
 
 
-def oled_write(line3="", line4=""):
+# save state on the error string
+_error = ""
+def oled_write(line3="", line4="", error=None, web=None):
+    global memory_error_count
+    global _error
+    global errors
     if not display:
         return
 
+    if error:
+        _error = error
+        errors.append(error)
+        if web:
+            web.errors.append(error)
+    if _error:
+        line3 = _error[:30]
+        line4 = _error[30:]
+
     if not line3:
         nowstruct = get_now_struct()
-        line3 = f"t: {nowstruct.tm_hour:02d}:{nowstruct.tm_min:02d}"
+        if nowstruct:
+            line3 = f"t: {nowstruct.tm_hour:02d}:{nowstruct.tm_min:02d}"
     if not line4:
         line4 = TMM_VERSION
+        if memory_error_count > 0:
+          line4 += f"; {memory_error_count} mec"
 
     oled_txt = ["NO WIFI", "", line3, line4]
     if wifi.radio.connected:
@@ -184,7 +203,7 @@ def oled_write(line3="", line4=""):
             # print("rt", metar_time, type(metar_time))
             newest_metar = max(newest_metar, metar_time)
 
-    if newest_metar > 0:
+    if now_epoch and newest_metar and newest_metar > 0:
         newest_metar_mins = (now_epoch - newest_metar) / 60
         oled_txt[1] += f"; {newest_metar_mins:.0f} mins"
 
@@ -278,9 +297,9 @@ def flight_category(viz_miles, clouds: list):
         return "VFR"
 
 
-def visib_miles(v):
+def visib_miles(v, icao=""):
     if v is None:
-        print(f"VISIBILITY NONE")
+        print(f"VISIBILITY NONE {icao}")
         return v
     # already an int, cool!
     if isinstance(v, int):
@@ -294,7 +313,7 @@ def visib_miles(v):
         print(f"matched: {m}")
         return int(v)
     else:
-        print(f"UNKNOWN VISIBILITY: {v}")
+        print(f"UNKNOWN VISIBILITY: {v}  {icao}")
     return v
 
 
@@ -355,12 +374,13 @@ def led_color(flight_cat):
 
 
 def process_airport(metar):
+    icao = metar.get("icaoId")
     if debug > 8:
         print("metar: ", metar)
-    viz_miles = visib_miles(metar.get("visib"))
+    viz_miles = visib_miles(metar.get("visib"), icao)
     if debug > 4:
         print("clouds: ", metar.get("clouds"))
-    icao = metar.get("icaoId")
+
     flight_cat = flight_category(viz_miles, metar.get("clouds", None))
     if debug > 6:
         print(f"{icao}: {fcat:>4s} {viz_miles:4.1f} {cloud_height}")
@@ -395,8 +415,11 @@ def is_valid_airport(x):
 
 BATCH_SIZE = 10
 
+memory_error_count = 0
 
 def try_wx():
+    global memory_error_count
+    global requests
     airport_ids = [x for x in airportlist if is_valid_airport(x)]
 
     # batch BATCH_SIZE at a time
@@ -406,18 +429,37 @@ def try_wx():
         this_airport_ids = ",".join(airport_ids[:BATCH_SIZE])
         airport_ids = airport_ids[BATCH_SIZE:]
         print("my ids", this_airport_ids)
+        ret = None
 
         try:
             avurl = f"https://aviationweather.gov/api/data/metar?format=json&ids={this_airport_ids}"
             print(avurl)
+            gc.collect()
             ret = requests.get(avurl)
+        except adafruit_requests.OutOfRetries as ex:
+            print("out of retries, no biggie.", ex)
+            return
         except RuntimeError as ex:
-            print(ex)
+            print("req error", ex)
+            return
+        except MemoryError as ex:
+            memory_error_count += 1
+            print(f"memory error at url {avurl}")
+            gc.collect()
+            if memory_error_count > 5:
+                # reset to 1, not 0, that way we'll still indicate an error
+                memory_error_count = 1
+                requests = None
+                gc.collect()
+                requests = adafruit_requests.Session(hpool, ssl.create_default_context())
+
             return
         for metar in ret.json():
             if debug > 8:
                 print(metar)
             process_airport(metar)
+
+        gc.collect()
         # print(f"wx ret: {ret}")
         # print(f"wx json: {ret.json()}")
     write_leds(True)
@@ -496,6 +538,7 @@ def init_led_string():
 class webserver:
     def __init__(self, server, ip_address):
         print(self, server, ip_address)
+        self.errors = []
         self.page_header = """<html><head><style>
   form {margin:0;padding:0}
   input {margin:0;padding:0}
@@ -503,7 +546,7 @@ class webserver:
   img { max-width: 96%; height: auto; width: 800px }
 </style></head><body>"""
 
-        self.navigation_string = """navigation: <a href="/airports">airports</a> | <a href="/config">config</a> | <a href="/files">files</a><br/>"""
+        self.navigation_string = """navigation: <a href="/">home</a> | <a href="/airports">airports</a> | <a href="/config">config</a> | <a href="/files">files</a><br/>"""
         self._wserver = server
         self._wserver.add_routes(
             [
@@ -568,7 +611,7 @@ class webserver:
 
                 metar_age = ""
                 metar_time = aw.get("report_time", None)
-                if metar_time:
+                if metar_time and now_epoch:
                     age_mins = (now_epoch - metar_time) / 60
                     metar_age = f"{age_mins:.1f} mins"
 
@@ -607,19 +650,24 @@ class webserver:
         )
 
     def show_root(self, req):
-        return adafruit_httpserver.Response(
-            req,
-            f"""
-{self.navigation_string}
-hello.<br />
-<br />
-temperature: {microcontroller.cpu.temperature}<br />
-frequency: {microcontroller.cpu.frequency}<br />
-voltage: {microcontroller.cpu.voltage}<br />
 
-""",
-            content_type="text/html",
-        )
+        #
+    #errors: {errors}<br />
+        def body():
+            yield f"""
+    {self.navigation_string}
+    hello.<br />
+    <br />
+    temperature: {microcontroller.cpu.temperature}<br />
+    frequency: {microcontroller.cpu.frequency}<br />
+    voltage: {microcontroller.cpu.voltage}<br />
+    memfree: {gc.mem_free()}<br />
+    memerr: {memory_error_count}<br />
+    error: {errors}<br />
+    """
+
+        return adafruit_httpserver.ChunkedResponse(
+                req, body, content_type="text/html")
 
     def files(self, req):
         rstr = f"""{self.navigation_string}\nget mount<br />"""
@@ -713,7 +761,7 @@ while True:
             last_wifi_check = t
             gc.collect()
             try_wifi()
-            oled_write()
+            oled_write(web=web)
             phone_home()
 
         if t - last_wx_check > 180:
@@ -735,9 +783,13 @@ while True:
             storage.remount(
                 "/", readonly=False, disable_concurrent_write_protection=True
             )
+        except:
+            pass
+        try:
             with open("errors.txt", "w+") as f:
                 f.write(traceback.format_exception(ex))
         except:
+            oled_write(error=str(traceback.format_exception(ex)), web=web)
             pixel.fill((255, 0, 0))  # red
             print("couldn't write to error file.")
             print(traceback.format_exception(ex))
