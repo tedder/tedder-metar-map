@@ -26,6 +26,21 @@ The v1 hardware for this is about $25 ($10ish for the carrier board, $12 for the
 
 ## how to install
 
+### bootstrap
+
+[Install circuitpython](https://learn.adafruit.com/adafruit-qt-py-esp32-s2/circuitpython) on [qtpy esp32-s2](https://www.adafruit.com/product/5325):
+
+1. press reset button
+1. when RGB LED turns purple, press reset button again (about a half second later? almost a double-click)
+1. note QTPYS2BOOT mounted folder on success
+1. copy latest circuitpython uf2 to this folder
+1. qtpy will auto-disconnect and remount as CIRCUITPY
+1. run `install.sh` to copy the proper files
+
+
+
+
+
 ## troubleshooting
 
 [circuitpython boot states](https://docs.circuitpython.org/en/8.2.x/README.html#:~:text=RGB%20status%20LED%20indicating%20CircuitPython%20state.):
@@ -33,4 +48,4 @@ The v1 hardware for this is about $25 ($10ish for the carrier board, $12 for the
 * Two red flashes - code ended due to an exception.
 * Three yellow flashes - safe mode. May be due to CircuitPython internal error.
 
-
+mu editor, mode->circuitpython, serial, CTRL-D in lower window, watch output
