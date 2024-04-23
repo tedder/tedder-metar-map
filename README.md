@@ -49,3 +49,14 @@ The v1 hardware for this is about $25 ($10ish for the carrier board, $12 for the
 * Three yellow flashes - safe mode. May be due to CircuitPython internal error.
 
 mu editor, mode->circuitpython, serial, CTRL-D in lower window, watch output
+
+## bricked device recovery
+
+1. boot+reset button sequence
+1. serial should appear in the [web esptool](https://adafruit.github.io/Adafruit_WebSerial_ESPTool/)
+1. connect
+1. erase
+1. choose file, combined.bin, program
+1. once finished, press reset button
+1. green LED should appear, and QTPYS2BOOT dir
+1. cp qtpy python uf2, it'll end with an I/O error

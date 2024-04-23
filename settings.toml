@@ -1,2 +1,3 @@
-CIRCUITPY_WIFI_SSID=""
-CIRCUITPY_WIFI_PASSWORD=""
+# don't leave these empty! it'll brick the device.
+CIRCUITPY_WIFI_SSID="wifiname"
+CIRCUITPY_WIFI_PASSWORD="wifipass"
