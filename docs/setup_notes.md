@@ -1,3 +1,8 @@
+---
+title: setup notes * tedder's metar map
+permalink: /setup_notes/
+---
+
 ![board](map_board.jpg)
 
 ## setup notes
