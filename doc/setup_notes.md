@@ -1,3 +1,5 @@
+![board](map_board.jpg)
+
 ## setup notes
 
 1. Connect the controller to your computer with a USB-C cable. You should see files, like a USB stick. Notably, airports.txt, settings.toml, and code.py are in there.
