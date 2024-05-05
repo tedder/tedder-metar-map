@@ -454,10 +454,13 @@ def try_wx():
                 requests = adafruit_requests.Session(hpool, ssl.create_default_context())
 
             return
-        for metar in ret.json():
-            if debug > 8:
-                print(metar)
-            process_airport(metar)
+        try:
+            for metar in ret.json():
+                if debug > 8:
+                    print(metar)
+                process_airport(metar)
+        except ValueError:
+            pass
 
         gc.collect()
         # print(f"wx ret: {ret}")
