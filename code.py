@@ -137,6 +137,7 @@ def get_now_struct():
         print("error calling datetime: ", error)
         errors.append(error)
         write_error(error)
+
         # this is usually a timeout, so let's sleep rather than slamming it.
         time.sleep(10)
 
@@ -145,6 +146,8 @@ def get_now_struct():
         print("error calling datetime: ", error)
         print(ntp._monotonic_start)
         errors.append(error)
+        errors.append("dt debug: " + str(ntp._monotonic_start))
+
         write_error(error)
         pass
     return
@@ -796,6 +799,10 @@ while True:
             oled_write(web=web)
             phone_home()
 
+            # 30sec is a good interval to print errors.
+            if len(errors):
+                print("errors:", errors)
+
         if t - last_wx_check > 180:
             last_wx_check = t
             gc.collect()
@@ -814,5 +821,3 @@ while True:
         print("can't open file: ", ex)
         error = traceback.format_exception(ex)
         write_error(error)
-    if len(errors):
-        print("errors:", errors)
