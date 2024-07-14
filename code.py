@@ -19,7 +19,7 @@ import ssl
 import os
 import gc
 
-TMM_VERSION = "v1.1.5"
+TMM_VERSION = "v1.1.6"
 WEB_PORT = 80
 if sys.implementation.name.lower() == "cpython":
     from fakes import *
@@ -105,15 +105,47 @@ ntp = adafruit_ntp.NTP(hpool, tz_offset=0)
 
 requests = adafruit_requests.Session(hpool, ssl.create_default_context())
 
+def write_error(errstr):
+    try:
+        storage.remount(
+            "/", readonly=False, disable_concurrent_write_protection=True
+        )
+    except:
+        pass
+    try:
+        with open("errors.txt", "w+") as f:
+            f.write(errstr)
+    except:
+        #oled_write(error=str(errstr), web=web)
+        #pixel.fill((255, 0, 0))  # red
+        print("couldn't write to error file: ", traceback.format_exception(ex))
 
 def get_now_struct():
+    global errors
     try:
         # print("ntp datetime", time.mktime(ntp.datetime) )
         # print("hhmm", ntp.datetime.tm_hour, ntp.datetime.tm_min)
         return ntp.datetime
     except socketpool.SocketPool.gaierror as ex:
+        error = traceback.format_exception(ex)
+        print("error calling datetime: ", error)
+        errors.append(error)
+        write_error(error)
         pass
     except OSError as ex:
+        error = traceback.format_exception(ex)
+        print("error calling datetime: ", error)
+        errors.append(error)
+        write_error(error)
+        # this is usually a timeout, so let's sleep rather than slamming it.
+        time.sleep(10)
+
+        pass
+    except OverflowError as ex:
+        print("error calling datetime: ", error)
+        print(ntp._monotonic_start)
+        errors.append(error)
+        write_error(error)
         pass
     return
 
@@ -454,13 +486,10 @@ def try_wx():
                 requests = adafruit_requests.Session(hpool, ssl.create_default_context())
 
             return
-        try:
-            for metar in ret.json():
-                if debug > 8:
-                    print(metar)
-                process_airport(metar)
-        except ValueError:
-            pass
+        for metar in ret.json():
+            if debug > 8:
+                print(metar)
+            process_airport(metar)
 
         gc.collect()
         # print(f"wx ret: {ret}")
@@ -782,18 +811,8 @@ while True:
         print(error)
         continue
     except Exception as ex:
-        try:
-            storage.remount(
-                "/", readonly=False, disable_concurrent_write_protection=True
-            )
-        except:
-            pass
-        try:
-            with open("errors.txt", "w+") as f:
-                f.write(traceback.format_exception(ex))
-        except:
-            oled_write(error=str(traceback.format_exception(ex)), web=web)
-            pixel.fill((255, 0, 0))  # red
-            print("couldn't write to error file.")
-            print(traceback.format_exception(ex))
-        continue
+        print("can't open file: ", ex)
+        error = traceback.format_exception(ex)
+        write_error(error)
+    if len(errors):
+        print("errors:", errors)
