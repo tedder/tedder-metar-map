@@ -19,7 +19,7 @@ import ssl
 import os
 import gc
 
-TMM_VERSION = "v1.1.6"
+TMM_VERSION = "v1.1.7"
 WEB_PORT = 80
 if sys.implementation.name.lower() == "cpython":
     from fakes import *
@@ -93,6 +93,8 @@ if i2c:
         display.fill(0)
         display.show()
     except ValueError:
+        pass
+    except OSError:
         pass
 
 # print("display: ", display)
