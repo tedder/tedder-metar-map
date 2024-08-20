@@ -1,4 +1,4 @@
-# circup install neopixel adafruit_requests adafruit_datetime adafruit_httpserver adafruit_ssd1306 adafruit_ntp
+# see ./install.sh for libs and installation
 # https://github.com/adafruit/Adafruit_CircuitPython_NeoPixel
 # wget https://raw.githubusercontent.com/adafruit/Adafruit_CircuitPython_framebuf/main/examples/font5x8.bin
 
