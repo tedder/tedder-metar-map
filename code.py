@@ -7,6 +7,7 @@
 
 import time
 import busio
+import bitbangio
 
 import adafruit_httpserver
 from adafruit_httpserver import GET, POST, Route
@@ -73,20 +74,32 @@ time.sleep(10)
 # i2c = board.I2C()
 # SCL1 is for the stemma/qwiic connector
 # i2c = busio.I2C(board.SCL1, board.SDA1)
+print("initting i2cxx")
 i2c = None
+
 try:
-    # i2c = board.STEMMA_I2C()
-    i2c = busio.I2C(board.SCL, board.SDA, frequency=400000)
-except RuntimeError:
+    # busio.x and board.x give "no pullup" error messages.
+    #i2c = board.STEMMA_I2C()
+    #i2c = busio.I2C(board.SCL1, board.SDA1, frequency=400000)
+    i2c = bitbangio.I2C(board.SCL, board.SDA, frequency=400000)
+    #i2c = bitbangio.I2C(board.D40, board.D41, frequency=400000)
+    #i2c = board.I2C()
+    print("yes i2c")
+except RuntimeError as ex:
+    print("runtimeerror on i2c: ", ex)
+    #print("pin SCL: ", board.SCL.__hash__())
+    #print("pin SDA: ", board.SDA)
     pass
 
 if i2c and i2c.try_lock():
+    print("haz i2c")
     isc = i2c.scan()
     print("isc", type(isc))
     for i in isc:
-        print(type(i), i)
+        print("scan: ", type(i), i)
     i2c.unlock()
 display = None
+
 if i2c:
     try:
         display = adafruit_ssd1306.SSD1306_I2C(128, 32, i2c)
@@ -97,11 +110,10 @@ if i2c:
     except OSError:
         pass
 
-# print("display: ", display)
+print("display: ", display)
 
 hpool = socketpool.SocketPool(wifi.radio)
 hserver = adafruit_httpserver.Server(hpool, debug=True)
-
 
 ntp = adafruit_ntp.NTP(hpool, tz_offset=0)
 
