@@ -1,4 +1,4 @@
-# see ./install.sh for libs and installation
+# circup install neopixel adafruit_requests adafruit_datetime adafruit_httpserver adafruit_ssd1306 adafruit_ntp
 # https://github.com/adafruit/Adafruit_CircuitPython_NeoPixel
 # wget https://raw.githubusercontent.com/adafruit/Adafruit_CircuitPython_framebuf/main/examples/font5x8.bin
 
@@ -7,7 +7,6 @@
 
 import time
 import busio
-import bitbangio
 
 import adafruit_httpserver
 from adafruit_httpserver import GET, POST, Route
@@ -74,32 +73,20 @@ time.sleep(10)
 # i2c = board.I2C()
 # SCL1 is for the stemma/qwiic connector
 # i2c = busio.I2C(board.SCL1, board.SDA1)
-print("initting i2cxx")
 i2c = None
-
 try:
-    # busio.x and board.x give "no pullup" error messages.
-    #i2c = board.STEMMA_I2C()
-    #i2c = busio.I2C(board.SCL1, board.SDA1, frequency=400000)
-    i2c = bitbangio.I2C(board.SCL, board.SDA, frequency=400000)
-    #i2c = bitbangio.I2C(board.D40, board.D41, frequency=400000)
-    #i2c = board.I2C()
-    print("yes i2c")
-except RuntimeError as ex:
-    print("runtimeerror on i2c: ", ex)
-    #print("pin SCL: ", board.SCL.__hash__())
-    #print("pin SDA: ", board.SDA)
+    # i2c = board.STEMMA_I2C()
+    i2c = busio.I2C(board.SCL, board.SDA, frequency=400000)
+except RuntimeError:
     pass
 
 if i2c and i2c.try_lock():
-    print("haz i2c")
     isc = i2c.scan()
     print("isc", type(isc))
     for i in isc:
-        print("scan: ", type(i), i)
+        print(type(i), i)
     i2c.unlock()
 display = None
-
 if i2c:
     try:
         display = adafruit_ssd1306.SSD1306_I2C(128, 32, i2c)
@@ -107,13 +94,12 @@ if i2c:
         display.show()
     except ValueError:
         pass
-    except OSError:
-        pass
 
-print("display: ", display)
+# print("display: ", display)
 
 hpool = socketpool.SocketPool(wifi.radio)
 hserver = adafruit_httpserver.Server(hpool, debug=True)
+
 
 ntp = adafruit_ntp.NTP(hpool, tz_offset=0)
 
@@ -121,18 +107,62 @@ requests = adafruit_requests.Session(hpool, ssl.create_default_context())
 
 def write_error(errstr):
     try:
-        storage.remount(
-            "/", readonly=False, disable_concurrent_write_protection=True
-        )
-    except:
-        pass
-    try:
-        with open("errors.txt", "w+") as f:
+        with open("errors0.txt", "a") as f:
+            f.write("e0\n")
             f.write(errstr)
-    except:
+            f.write("\n--\n")
+            return
+    except Exception as ex:
         #oled_write(error=str(errstr), web=web)
         #pixel.fill((255, 0, 0))  # red
         print("couldn't write to error file: ", traceback.format_exception(ex))
+
+    try:
+        storage.remount(
+            "/", readonly=False, disable_concurrent_write_protection=True
+        )
+    except Exception as ex:
+        pass
+    try:
+        with open("errors.txt", "a") as f:
+            f.write("e1\n")
+            f.write(errstr)
+            f.write("\n--\n")
+    except Exception as ex:
+        #oled_write(error=str(errstr), web=web)
+        #pixel.fill((255, 0, 0))  # red
+        print("couldn't write to error file: ", traceback.format_exception(ex))
+    try:
+        with open("sd/errors.txt", "a") as f:
+            f.write("e2\n")
+            f.write(errstr)
+            f.write("\n--\n")
+    except Exception as ex:
+        pass
+    try:
+        with open("/sd/errorss.txt", "a") as f:
+            f.write("e3\n")
+            f.write(errstr)
+            f.write("\n--\n")
+    except Exception as ex:
+        pass
+
+def dir_to_str(path, indent=0):
+    ret = ""
+    idt = "&nbsp;" * (indent*4)
+    f = storage.getmount("/")
+    for ff in f.ilistdir(path):
+        fullpath = path + "/" + ff[0]
+        ftype = ff[1]
+        if ftype & 16384: # directory
+          ret += f"""{idt}<b>{fullpath}</b><br />\n"""
+          ret += dir_to_str(fullpath, indent=indent+1)
+        elif ftype & 32768: # file
+          ret += f"""{idt}<a href="/files?f={fullpath}">{ff[0]}</a> {ff[3]}<br />\n"""
+        else: # unknown type
+            ret += f"""{idt}{ff[0]} ????type???? {ff}<br />\n"""
+
+    return ret
 
 def get_now_struct():
     global errors
@@ -143,34 +173,35 @@ def get_now_struct():
     except socketpool.SocketPool.gaierror as ex:
         error = traceback.format_exception(ex)
         print("error calling datetime: ", error)
-        #errors.append(error)
-        #write_error(error)
+        errors.append(error)
+        write_error(error)
         pass
     except OSError as ex:
         error = traceback.format_exception(ex)
         print("error calling datetime: ", error)
-        errors.append(error)
-        write_error(error)
+        #errors.append(error)
+        #write_error(error)
 
         # this is usually a timeout, so let's sleep rather than slamming it.
         time.sleep(10)
 
         pass
-    except OverflowError as ex:
-        print("error calling datetime: ", error)
-        print(ntp._monotonic_start)
-        errors.append(error)
-        errors.append("dt debug: " + str(ntp._monotonic_start))
-
-        write_error(error)
-        pass
+    #except OverflowError as ex:
+    #    print("error calling datetime: ", error)
+    #    print(ntp._monotonic_start)
+    #    errors.append(error)
+    #    errors.append("dt debug: " + str(ntp._monotonic_start))
+    #
+    #    write_error(error)
+    #    pass
     return
 
 
 def get_now():
     nowstruct = get_now_struct()
     if nowstruct:
-        return time.mktime(ntp.datetime)
+        #return time.mktime(ntp.datetime)
+        return time.mktime(nowstruct)
     return
 
 
@@ -417,7 +448,7 @@ def led_color(flight_cat):
     elif flight_cat == "IFR":
         return (127, 0, 0)  # red
     elif flight_cat == "LIFR":
-        return (0, 127, 127)  # magenta
+        return (255,22,199)  # pink
     # else:
     return (255, 255, 0)  # yellow
 
@@ -566,7 +597,7 @@ def init_led_string():
 
     for led_n in range(0, len(airportlist)):
         icao = airportlist[led_n]
-        ledc = (150, 150, 100)
+        ledc = (75, 75, 50)
         if icao.startswith("OFF"):
             ledc = (0, 0, 0)
         ledstate[led_n] = {
@@ -720,14 +751,32 @@ class webserver:
 
     def files(self, req):
         rstr = f"""{self.navigation_string}\nget mount<br />"""
-        f = storage.getmount("/")
-        for ff in f.ilistdir(""):
-            rstr += f"{ff}<br />\n"
-            print(ff)
+
+        if req.query_params.get("f"):
+            try:
+                with open(req.query_params.get("f")) as f:
+                    print("opened.")
+                    return adafruit_httpserver.Response(
+                        req,
+                        f.read(),
+                        content_type="text/plain",
+                    )
+            except:
+                rstr += "open/read failed.<br />"
+
+        rstr += dir_to_str("")
+
+
+
+        #for ff in f.ilistdir(""):
+        #    rstr += f"""<a href="/files?f={ff[0]}">{ff[0]}</a> {ff}<br />\n"""
+        #    print(ff)
+        #for ff in f.ilistdir("/sd"):
+        #    rstr += f"""<a href="/files?f=/sd/{ff[0]}">/sd/{ff[0]}</a> {ff}<br />\n"""
+        #    print(ff)
         return adafruit_httpserver.Response(
             req,
             f"""
-hello.
 {rstr}
 """,
             content_type="text/html",
@@ -776,6 +825,15 @@ airportlist = load_airports()
 ledstate = [{}] * len(airportlist)
 
 # hserver.serve_forever(str(wifi.radio.ipv4_address))
+
+try:
+    storage.remount(
+        "/", readonly=False, disable_concurrent_write_protection=True
+    )
+    with open("/sd/boot.txt", "a") as f:
+        f.write("hi.")
+except:
+  pass
 
 print("hello world")
 print(f"fstring test {airportlist}, {len(airportlist)}")
