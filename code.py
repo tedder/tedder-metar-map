@@ -143,8 +143,8 @@ def get_now_struct():
     except socketpool.SocketPool.gaierror as ex:
         error = traceback.format_exception(ex)
         print("error calling datetime: ", error)
-        errors.append(error)
-        write_error(error)
+        #errors.append(error)
+        #write_error(error)
         pass
     except OSError as ex:
         error = traceback.format_exception(ex)
