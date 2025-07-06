@@ -30,6 +30,7 @@ The v1 hardware for this is about $25 ($10ish for the carrier board, $12 for the
 
 [Install circuitpython](https://learn.adafruit.com/adafruit-qt-py-esp32-s2/circuitpython) on [qtpy esp32-s2](https://www.adafruit.com/product/5325):
 
+1. [download circuitpython uf2](https://circuitpython.org/board/adafruit_qtpy_esp32s2/)
 1. press reset button
 1. when RGB LED turns purple, press reset button again (about a half second later? almost a double-click)
 1. note QTPYS2BOOT mounted folder on success
