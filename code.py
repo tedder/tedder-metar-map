@@ -18,6 +18,7 @@ import digitalio
 import ssl
 import os
 import gc
+import ipaddress
 
 TMM_VERSION = "v1.1.7"
 WEB_PORT = 80
@@ -560,6 +561,13 @@ def try_wifi():
             time.sleep(30)  # sleep, it'll implicitly try again
     if debug > 4:
         print("wifi: ", wifi.radio.ipv4_address)
+
+    if len(os.getenv("OVERRIDE_DNS", "")) > 0:
+        wifi.radio.ipv4_dns = ipaddress.ip_address(os.getenv("OVERRIDE_DNS", ""))
+    else:
+        wifi.radio.ipv4_dns = ipaddress.ip_address("1.1.1.1")
+    print(f"wifi: {wifi.radio.ipv4_address}")
+    print(f"dns:  {wifi.radio.ipv4_dns}")
 
     oled_write()
 
