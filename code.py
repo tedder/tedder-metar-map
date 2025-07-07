@@ -220,11 +220,10 @@ def phone_home():
     else:
         last_phone_home = now_epoch
 
+    return
     try:
-        #ret =
-        #requests.post(
-        #    "https://api.tedder.me/metar-map/status",
-            # data=f"""board_uid={str(microcontroller.Processor.uid)} version={TMM_VERSION}"""
+        ret = requests.get("http://am.colo.tedder.me:88/status",
+            data=f"""board_uid={str(microcontroller.Processor.uid)} version={TMM_VERSION}""")
             # ",
             # "airportlist": airportlist,
             # "airportwx": airportwx,
@@ -233,7 +232,9 @@ def phone_home():
             # "ip": wifi.radio.ipv4_address,
             # "board_id": board.board_id,
         #)
-        #print("post ret: ", ret)
+        print(f"post ret: {ret}")
+        ret.close()
+        gc.collect()
         pass
     except Exception as ex:
         print("phonehome failed", ex)
@@ -537,12 +538,18 @@ def try_wx():
             return
         for metar in ret.json():
             if debug > 8:
-                print(metar)
+                print("m", metar)
             process_airport(metar)
 
+        if ret:
+            try:
+                ret.close()
+            except:
+                pass
         gc.collect()
         # print(f"wx ret: {ret}")
         # print(f"wx json: {ret.json()}")
+    print("boom.")
     write_leds(True)
 
 
