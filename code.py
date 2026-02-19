@@ -7,6 +7,9 @@
 
 import time
 import busio
+import struct
+import json
+import re
 
 import adafruit_httpserver
 from adafruit_httpserver import GET, POST, Route
@@ -19,18 +22,45 @@ import ssl
 import os
 import gc
 import ipaddress
+import microcontroller
 
+FIRMWARE_VERSION = "1.2.6"
 TMM_VERSION = "v1.1.7"
+
+# Build user agent string with CircuitPython version
+try:
+    cp_version = ".".join(str(v) for v in sys.implementation.version[:3])
+    USER_AGENT = f"tedder-metar-map/{FIRMWARE_VERSION} circuitpython/{cp_version}"
+except:
+    USER_AGENT = f"tedder-metar-map/{FIRMWARE_VERSION} circuitpython/unknown"
+
 WEB_PORT = 80
+
 if sys.implementation.name.lower() == "cpython":
     from fakes import *
     from datetime import datetime
 
     WEB_PORT = 5000  # nonprivileged on a real OS
+    watchdog_enabled = False
 else:
     import adafruit_requests
     from adafruit_datetime import datetime
     import microcontroller
+    import supervisor
+
+    # Watchdog setup
+    try:
+        from watchdog import WatchDogMode
+        supervisor.set_next_code_file("code.py")
+        # Set timeout to 3600s (60 minutes) - we'll handle diagnostic reboot differently
+        # Boot sequence should complete well under this timeout
+        microcontroller.watchdog.timeout = 3600  # 60 minutes for normal operation
+        microcontroller.watchdog.mode = WatchDogMode.RESET
+        watchdog_enabled = True
+        print("[OK] Watchdog enabled (3600s / 60min)")
+    except Exception as e:
+        watchdog_enabled = False
+        print(f"[WARN] Watchdog setup failed: {e}")
 
 try:
     import storage
@@ -61,50 +91,142 @@ debug = 1
 # debug 0 == stfu
 # debug 10 == all the noise
 
+# Debug flags (32-bit bitmask, persistent in NVM)
+# Bits 0-4: Hardware/display errors
+# Bit 0: 0x01 = Display init failed
+# Bit 1: 0x02 = Display update failed
+# Bit 2: 0x04 = WiFi enable failed
+# Bit 3: 0x08 = METAR fetch failed
+# Bit 4: 0x10 = Reserved
+# Bits 5-8: HTTP/Network errors
+# Bit 5: 0x20 = HTTP request exception
+# Bit 6: 0x40 = NTP datetime failed
+# Bit 7: 0x80 = Reserved
+# Bit 8: 0x100 = Reserved
+# Bits 9-15: System errors
+# Bit 9: 0x200 = WiFi connect failed (3+ attempts)
+# Bit 10: 0x400 = Main loop exception
+# Bit 11: 0x800 = NVM write failed
+# Bit 12: 0x1000 = Memory error
+# Bit 13: 0x2000 = IPv6 error/incompatibility
+# Bit 14: 0x4000 = NeoPixel initialization failed
+
+debug_flags = 0
+try:
+    debug_flags = struct.unpack("<I", microcontroller.nvm[0:4])[0] if hasattr(microcontroller, 'nvm') else 0
+except Exception as e:
+    print(f"[WARN] NVM read failed ({e}), clearing NVM")
+    # Clear potentially corrupted NVM
+    try:
+        microcontroller.nvm[0:4] = struct.pack("<I", 0)
+    except:
+        pass
+    debug_flags = 0
+
+def set_debug_flag(bit):
+    global debug_flags
+    debug_flags |= (1 << bit)
+    try:
+        microcontroller.nvm[0:4] = struct.pack("<I", debug_flags)
+    except Exception as e:
+        print(f"[WARN] NVM write failed: {e}")
+        set_debug_flag(11)  # Set bit 11 to indicate NVM write failure
+
+def clear_debug_flag(bit):
+    global debug_flags
+    debug_flags &= ~(1 << bit)
+    try:
+        microcontroller.nvm[0:4] = struct.pack("<I", debug_flags)
+    except Exception as e:
+        print(f"[WARN] NVM write failed: {e}")
+
+def reset_debug_flags():
+    global debug_flags
+    debug_flags = 0
+    try:
+        microcontroller.nvm[0:4] = struct.pack("<I", 0)
+    except:
+        pass
+
+def feed_watchdog():
+    if sys.implementation.name.lower() != "cpython" and watchdog_enabled:
+        try:
+            microcontroller.watchdog.feed()
+        except:
+            pass
+
 # board's single pixel
-pixel = neopixel.NeoPixel(board.NEOPIXEL, 1)
-pixel.fill((0, 0, 90))  # light blue
+try:
+    pixel = neopixel.NeoPixel(board.NEOPIXEL, 1)
+    pixel.fill((0, 0, 90))  # light blue
+    print("[OK] NeoPixel initialized")
+except Exception as e:
+    print(f"[WARN] NeoPixel init failed: {e}")
+    pixel = None
 time.sleep(10)
 
-
-# print("pins: ", board.SCL, board.SDA)
-# print(dir(board))
-
-# i2c = busio.I2C(board.SCL, board.SDA)
-# i2c = board.I2C()
-# SCL1 is for the stemma/qwiic connector
-# i2c = busio.I2C(board.SCL1, board.SDA1)
+# Initialize I2C for display
 i2c = None
 try:
-    # i2c = board.STEMMA_I2C()
     i2c = busio.I2C(board.SCL, board.SDA, frequency=400000)
-except RuntimeError:
-    pass
+    print("[OK] I2C initialized")
+except RuntimeError as e:
+    print(f"[WARN] I2C init failed: {e}")
+    i2c = None
 
-if i2c and i2c.try_lock():
-    isc = i2c.scan()
-    print("isc", type(isc))
-    for i in isc:
-        print(type(i), i)
-    i2c.unlock()
+# Initialize display
 display = None
 if i2c:
+    if i2c.try_lock():
+        try:
+            i2c_devices = i2c.scan()
+            print(f"[OK] I2C devices found: {i2c_devices}")
+        except Exception as e:
+            print(f"[WARN] I2C scan failed: {e}")
+        i2c.unlock()
+
     try:
         display = adafruit_ssd1306.SSD1306_I2C(128, 32, i2c)
         display.fill(0)
         display.show()
-    except ValueError:
-        pass
+        print("[OK] OLED display initialized")
+    except Exception as e:
+        print(f"[FAIL] OLED init failed: {e}")
+        set_debug_flag(0)
+        display = None
+else:
+    print("[WARN] I2C not available, display disabled")
 
-# print("display: ", display)
+try:
+    hpool = socketpool.SocketPool(wifi.radio)
+    print("[OK] SocketPool initialized")
+except Exception as e:
+    print(f"[FAIL] SocketPool init failed: {e}")
+    hpool = None
 
-hpool = socketpool.SocketPool(wifi.radio)
-hserver = adafruit_httpserver.Server(hpool, debug=True)
+try:
+    hserver = adafruit_httpserver.Server(hpool, debug=False)
+    print("[OK] HTTP server initialized")
+except Exception as e:
+    print(f"[FAIL] HTTP server init failed: {e}")
+    hserver = None
 
+try:
+    ntp = adafruit_ntp.NTP(hpool, tz_offset=0)
+    # Force NTP to fetch time NOW (before SSL context creation)
+    _ = ntp.datetime
+    print("[OK] NTP initialized and time synced")
+except Exception as e:
+    print(f"[WARN] NTP init failed: {e}")
+    ntp = None
 
-ntp = adafruit_ntp.NTP(hpool, tz_offset=0)
-
-requests = adafruit_requests.Session(hpool, ssl.create_default_context())
+try:
+    requests = adafruit_requests.Session(hpool, ssl.create_default_context())
+    print("[OK] Requests session initialized")
+except Exception as e:
+    print(f"[FAIL] Requests init failed: {e}")
+    set_debug_flag(5)
+    requests = None
 
 def write_error(errstr):
     try:
@@ -167,35 +289,25 @@ def dir_to_str(path, indent=0):
 
 def get_now_struct():
     global errors
+    if not ntp:
+        return None
     try:
-        # print("ntp datetime", time.mktime(ntp.datetime) )
-        # print("hhmm", ntp.datetime.tm_hour, ntp.datetime.tm_min)
         return ntp.datetime
     except socketpool.SocketPool.gaierror as ex:
-        error = traceback.format_exception(ex)
-        print("error calling datetime: ", error)
-        errors.append(error)
-        write_error(error)
-        pass
+        print(f"[WARN] NTP gaierror: {ex}")
+        set_debug_flag(6)
+        errors.append(str(ex))
+        write_error(str(ex))
+        return None
     except OSError as ex:
-        error = traceback.format_exception(ex)
-        print("error calling datetime: ", error)
-        #errors.append(error)
-        #write_error(error)
-
-        # this is usually a timeout, so let's sleep rather than slamming it.
+        print(f"[WARN] NTP OSError (timeout): {ex}")
+        set_debug_flag(6)
         time.sleep(10)
-
-        pass
-    #except OverflowError as ex:
-    #    print("error calling datetime: ", error)
-    #    print(ntp._monotonic_start)
-    #    errors.append(error)
-    #    errors.append("dt debug: " + str(ntp._monotonic_start))
-    #
-    #    write_error(error)
-    #    pass
-    return
+        return None
+    except Exception as ex:
+        print(f"[FAIL] NTP error: {ex}")
+        set_debug_flag(6)
+        return None
 
 
 def get_now():
@@ -207,6 +319,8 @@ def get_now():
 
 
 last_phone_home = 0
+last_exception_time = 0  # For non-blocking exception throttling
+wifi_ssid = ""  # Store SSID when connected
 
 
 def phone_home():
@@ -214,30 +328,49 @@ def phone_home():
     if not wifi.radio.connected:
         return
 
+    uptime_seconds = time.monotonic_ns() // 1_000_000_000
+
     now_epoch = get_now()
     if last_phone_home and now_epoch and (now_epoch - last_phone_home) < 3600:
         return
     else:
         last_phone_home = now_epoch
 
-    return
+    # Check in to generic-sink with device telemetry
     try:
-        ret = requests.get("http://am.colo.tedder.me:88/status",
-            data=f"""board_uid={str(microcontroller.Processor.uid)} version={TMM_VERSION}""")
-            # ",
-            # "airportlist": airportlist,
-            # "airportwx": airportwx,
-            # "ledstate": ledstate,
-            # "errors": errors,
-            # "ip": wifi.radio.ipv4_address,
-            # "board_id": board.board_id,
-        #)
-        print(f"post ret: {ret}")
+        # Convert board UID from bytes to hex string
+        board_uid_hex = microcontroller.cpu.uid.hex() if hasattr(microcontroller.cpu.uid, 'hex') else microcontroller.cpu.uid
+
+        # Get SSID from environment variable if not already set
+        current_ssid = wifi_ssid if wifi_ssid else os.getenv("CIRCUITPY_WIFI_SSID", "")
+
+        device_data = {
+            "device_id": "tedder-metar-map-esp32s2",
+            "board_uid": board_uid_hex,
+            "firmware_version": FIRMWARE_VERSION,
+            "uptime_seconds": uptime_seconds,
+            "timestamp": now_epoch if now_epoch else 0,
+            "wifi_connected": wifi.radio.connected,
+            "wifi_ssid": current_ssid,
+            "wifi_ip": str(wifi.radio.ipv4_address) if wifi.radio.ipv4_address else "0.0.0.0",
+            "ntp_synced": ntp is not None,
+            "debug_flags": f"0x{debug_flags:x}",
+            "user_agent": USER_AGENT
+        }
+
+        json_data = json.dumps(device_data)
+        headers = {"Content-Type": "application/json"}
+
+        ret = requests.post(
+            "http://am.colo.tedder.me:5091/data",
+            data=json_data,
+            headers=headers
+        )
+        print(f"[OK] Device check-in sent, response: {ret.status_code}")
         ret.close()
         gc.collect()
-        pass
     except Exception as ex:
-        print("phonehome failed", ex)
+        print(f"[WARN] Device check-in failed: {ex}")
         pass
 
 
@@ -247,54 +380,56 @@ def oled_write(line3="", line4="", error=None, web=None):
     global memory_error_count
     global _error
     global errors
+    feed_watchdog()
     if not display:
         return
 
-    if error:
-        _error = error
-        errors.append(error)
-        if web:
-            web.errors.append(error)
-    if _error:
-        line3 = _error[:30]
-        line4 = _error[30:]
+    try:
+        if error:
+            _error = error
+            errors.append(error)
+            if web:
+                web.errors.append(error)
+        if _error:
+            line3 = _error[:30]
+            line4 = _error[30:]
 
-    if not line3:
-        nowstruct = get_now_struct()
-        if nowstruct:
-            line3 = f"t: {nowstruct.tm_hour:02d}:{nowstruct.tm_min:02d}"
-    if not line4:
-        line4 = TMM_VERSION
-        if memory_error_count > 0:
-          line4 += f"; {memory_error_count} mec"
+        if not line3:
+            nowstruct = get_now_struct()
+            if nowstruct:
+                line3 = f"t: {nowstruct.tm_hour:02d}:{nowstruct.tm_min:02d}"
+        if not line4:
+            line4 = FIRMWARE_VERSION
+            if memory_error_count > 0:
+              line4 += f"; {memory_error_count}me"
 
-    oled_txt = ["NO WIFI", "", line3, line4]
-    if wifi.radio.connected:
-        oled_txt[0] = f"IP: {wifi.radio.ipv4_address}"
+        oled_txt = ["NO WIFI", "", line3, line4]
+        if wifi.radio.connected:
+            oled_txt[0] = f"IP: {wifi.radio.ipv4_address}"
 
-    oled_txt[1] = f"apts: {len(airportlist)}"
+        oled_txt[1] = f"apts: {len(airportlist)}"
 
-    now_epoch = get_now()
-    newest_metar = 0
-    for icao, aw in airportwx.items():
-        # for led_n in range(0, len(airportlist)):
-        # icao = airportlist[led_n]
-        aw = airportwx.get(icao, {})
-        metar_time = aw.get("report_time", None)
-        if metar_time:
-            # print("rt", metar_time, type(metar_time))
-            newest_metar = max(newest_metar, metar_time)
+        now_epoch = get_now()
+        newest_metar = 0
+        for icao, aw in airportwx.items():
+            aw = airportwx.get(icao, {})
+            metar_time = aw.get("report_time", None)
+            if metar_time:
+                newest_metar = max(newest_metar, metar_time)
 
-    if now_epoch and newest_metar and newest_metar > 0:
-        newest_metar_mins = (now_epoch - newest_metar) / 60
-        oled_txt[1] += f"; {newest_metar_mins:.0f} mins"
+        if now_epoch and newest_metar and newest_metar > 0:
+            newest_metar_mins = (now_epoch - newest_metar) / 60
+            oled_txt[1] += f"; {newest_metar_mins:.0f}m"
 
-    display.fill(0)
-    display.text(oled_txt[0], 0, 0, 1)
-    display.text(oled_txt[1], 0, 8, 1)
-    display.text(oled_txt[2], 0, 16, 1)
-    display.text(oled_txt[3], 0, 24, 1)
-    display.show()
+        display.fill(0)
+        display.text(oled_txt[0], 0, 0, 1)
+        display.text(oled_txt[1], 0, 8, 1)
+        display.text(oled_txt[2], 0, 16, 1)
+        display.text(oled_txt[3], 0, 24, 1)
+        display.show()
+    except Exception as e:
+        print(f"[FAIL] OLED update error: {e}")
+        set_debug_flag(1)
 
 
 def load_airports():
@@ -404,6 +539,9 @@ def tuple_to_hex_str(x):
 
 
 def write_leds(leds_changed=False):
+    if not pix:
+        return
+
     tenth = time.monotonic() % 10
 
     for led_n in range(0, len(airportlist)):
@@ -502,6 +640,7 @@ memory_error_count = 0
 def try_wx():
     global memory_error_count
     global requests
+    feed_watchdog()
     airport_ids = [x for x in airportlist if is_valid_airport(x)]
 
     # batch BATCH_SIZE at a time
@@ -510,36 +649,49 @@ def try_wx():
             break
         this_airport_ids = ",".join(airport_ids[:BATCH_SIZE])
         airport_ids = airport_ids[BATCH_SIZE:]
-        print("my ids", this_airport_ids)
+        print(f"[*] METAR fetch: {this_airport_ids}")
         ret = None
 
         try:
             avurl = f"https://aviationweather.gov/api/data/metar?format=json&ids={this_airport_ids}"
-            print(avurl)
+            print(f"[*] URL: {avurl}")
             gc.collect()
             ret = requests.get(avurl)
+            print(f"[OK] HTTP {ret.status_code}")
+            clear_debug_flag(5)  # Clear HTTP error flag on success
         except adafruit_requests.OutOfRetries as ex:
-            print("out of retries, no biggie.", ex)
+            print(f"[FAIL] HTTP: Out of retries: {ex}")
+            set_debug_flag(5)  # HTTP request exception
             return
         except RuntimeError as ex:
-            print("req error", ex)
+            print(f"[FAIL] HTTP: RuntimeError: {ex}")
+            set_debug_flag(5)
             return
         except MemoryError as ex:
             memory_error_count += 1
-            print(f"memory error at url {avurl}")
+            print(f"[WARN] Memory error during METAR fetch")
+            set_debug_flag(12)  # Memory error
             gc.collect()
             if memory_error_count > 5:
-                # reset to 1, not 0, that way we'll still indicate an error
                 memory_error_count = 1
                 requests = None
                 gc.collect()
                 requests = adafruit_requests.Session(hpool, ssl.create_default_context())
-
             return
-        for metar in ret.json():
-            if debug > 8:
-                print("m", metar)
-            process_airport(metar)
+        except Exception as ex:
+            print(f"[FAIL] HTTP: Unexpected error: {ex}")
+            set_debug_flag(5)
+            return
+
+        try:
+            for metar in ret.json():
+                if debug > 8:
+                    print(f"[*] METAR: {metar}")
+                process_airport(metar)
+            clear_debug_flag(3)  # Clear METAR parse error flag on success
+        except Exception as ex:
+            print(f"[FAIL] JSON parse error: {ex}")
+            set_debug_flag(3)  # METAR fetch failed
 
         if ret:
             try:
@@ -547,34 +699,64 @@ def try_wx():
             except:
                 pass
         gc.collect()
-        # print(f"wx ret: {ret}")
-        # print(f"wx json: {ret.json()}")
-    print("boom.")
+
+    print("[OK] METAR fetch complete")
     write_leds(True)
 
 
 def try_wifi():
+    feed_watchdog()
     if not wifi.radio.connected:
-        ssid = os.getenv("CIRCUITPY_WIFI_SSID", "nossid")
-        pw = os.getenv("CIRCUITPY_WIFI_PASSWORD", "nopassword")
-        print("connecting", ssid, pw)
+        ssid = os.getenv("CIRCUITPY_WIFI_SSID", "")
+        pw = os.getenv("CIRCUITPY_WIFI_PASSWORD", "")
+
+        if not ssid:
+            print("[WARN] WiFi SSID not configured in settings.toml")
+            set_debug_flag(2)
+            pixel.fill((50, 0, 0))  # dim red
+            oled_write("No WiFi config", "Check settings.toml")
+            time.sleep(30)
+            return
+
+        print(f"[*] WiFi: Attempting {ssid}")
 
         try:
             wifi.radio.connect(ssid, pw, timeout=30)
+            global wifi_ssid
+            wifi_ssid = ssid
+            print(f"[OK] WiFi connected to {ssid}")
+            # Clear LED when WiFi reconnects (keep debug flag though)
+            if pixel:
+                pixel.fill((0, 55, 0))  # dim green
         except ConnectionError as ex:
-            print("wifi failed, ex: ", ex)
+            print(f"[FAIL] WiFi connection failed: {ex}")
+            set_debug_flag(9)  # WiFi connect failed
             pixel.fill((50, 0, 0))  # dim red
-            oled_write("wifi failed", str(ex))
-            time.sleep(30)  # sleep, it'll implicitly try again
-    if debug > 4:
-        print("wifi: ", wifi.radio.ipv4_address)
+            oled_write("WiFi failed", str(ex)[:20])
+            time.sleep(30)
+            return
 
-    if len(os.getenv("OVERRIDE_DNS", "")) > 0:
-        wifi.radio.ipv4_dns = ipaddress.ip_address(os.getenv("OVERRIDE_DNS", ""))
-    else:
-        wifi.radio.ipv4_dns = ipaddress.ip_address("1.1.1.1")
-    print(f"wifi: {wifi.radio.ipv4_address}")
-    print(f"dns:  {wifi.radio.ipv4_dns}")
+    if debug > 4:
+        print(f"[OK] WiFi IP: {wifi.radio.ipv4_address}")
+
+    # Set DNS with IPv6 error detection
+    try:
+        if len(os.getenv("OVERRIDE_DNS", "")) > 0:
+            wifi.radio.ipv4_dns = ipaddress.ip_address(os.getenv("OVERRIDE_DNS", ""))
+        else:
+            wifi.radio.ipv4_dns = ipaddress.ip_address("1.1.1.1")
+    except (OSError, AttributeError) as ex:
+        error_str = str(ex).lower()
+        if "ipv6" in error_str or "address family" in error_str or "not supported" in error_str:
+            print(f"[FAIL] IPv6 incompatibility detected: {ex}")
+            set_debug_flag(13)  # IPv6 error
+            if pixel:
+                pixel.fill((138, 43, 226))  # Blue-violet for IPv6 issue
+            oled_write("IPv6 error", "ISP issue")
+        else:
+            print(f"[WARN] DNS setting failed: {ex}")
+
+    print(f"[OK] WiFi: {wifi.radio.ipv4_address}, DNS: {wifi.radio.ipv4_dns}, flags: 0x{debug_flags:x}")
 
     oled_write()
 
@@ -621,7 +803,8 @@ def init_led_string():
             "blink_interval": 0,
             "icao": airportlist[led_n],
         }
-        pix[led_n] = ledc
+        if pix:
+            pix[led_n] = ledc
 
         airportwx[icao] = {
             "cat": "",
@@ -641,7 +824,7 @@ class webserver:
   img { max-width: 96%; height: auto; width: 800px }
 </style></head><body>"""
 
-        self.navigation_string = """navigation: <a href="/">home</a> | <a href="/airports">airports</a> | <a href="/config">config</a> | <a href="/files">files</a><br/>"""
+        self.navigation_string = """navigation: <a href="/">home</a> | <a href="/airports">airports</a> | <a href="/config">config</a> | <a href="/debug">debug</a> | <a href="/files">files</a><br/>"""
         self._wserver = server
         self._wserver.add_routes(
             [
@@ -649,6 +832,8 @@ class webserver:
                 Route("/", GET, self.show_root),
                 Route("/files", GET, self.files),
                 Route("/config", [GET, POST], self.config),
+                Route("/debug/clear", GET, self.debug_clear),
+                Route("/debug", GET, self.debug),
             ]
         )
         # self.server.start("0.0.0.0")
@@ -828,6 +1013,102 @@ class webserver:
             content_type="text/html",
         )
 
+    def debug(self, req):
+        feed_watchdog()
+        # Calculate uptime
+        uptime_seconds = int(time.monotonic())
+        uptime_days = uptime_seconds // 86400
+        uptime_hours = (uptime_seconds % 86400) // 3600
+        uptime_mins = (uptime_seconds % 3600) // 60
+        uptime_secs = uptime_seconds % 60
+        uptime_str = f"{uptime_days}d {uptime_hours}h {uptime_mins}m {uptime_secs}s"
+
+        # Decode debug flags - bit by bit
+        bits_status = []
+        for bit in range(15):
+            flag_name = ""
+            is_set = bool(debug_flags & (1 << bit))
+
+            if bit == 0:
+                flag_name = "Display init failed"
+            elif bit == 1:
+                flag_name = "Display update failed"
+            elif bit == 2:
+                flag_name = "WiFi enable failed"
+            elif bit == 3:
+                flag_name = "METAR fetch failed"
+            elif bit == 4:
+                flag_name = "Reserved"
+            elif bit == 5:
+                flag_name = "HTTP request exception"
+            elif bit == 6:
+                flag_name = "NTP datetime failed"
+            elif bit == 7:
+                flag_name = "Reserved"
+            elif bit == 8:
+                flag_name = "Reserved"
+            elif bit == 9:
+                flag_name = "WiFi connect failed (3+)"
+            elif bit == 10:
+                flag_name = "Main loop exception"
+            elif bit == 11:
+                flag_name = "NVM write failed"
+            elif bit == 12:
+                flag_name = "Memory error"
+            elif bit == 13:
+                flag_name = "IPv6 incompatibility"
+            elif bit == 14:
+                flag_name = "NeoPixel initialization failed"
+
+            status = "ON" if is_set else "off"
+            bits_status.append(f"Bit {bit:2d} ({status:3s}): {flag_name}")
+
+        bits_html = "<br/>".join(bits_status)
+
+        # Check which error files exist
+        error_files = ["errors0.txt", "errors.txt", "sd/errors.txt", "/sd/errorss.txt"]
+        error_files_html = ""
+        for ef in error_files:
+            try:
+                with open(ef):
+                    error_files_html += f'<li><a href="/files?f={ef}">{ef}</a></li>\n'
+            except:
+                pass
+
+        if not error_files_html:
+            error_files_html = "<li>No error files found</li>"
+        else:
+            error_files_html = "<ul>\n" + error_files_html + "</ul>"
+
+        return adafruit_httpserver.Response(
+            req,
+            f"""<html><body>{self.navigation_string}
+<h2>Debug Status</h2>
+<p>Firmware: {FIRMWARE_VERSION}</p>
+<p>Uptime: {uptime_str}</p>
+<p>Raw flags: 0x{debug_flags:08x} ({debug_flags})</p>
+<pre>{bits_html}</pre>
+<h3>Error Files</h3>
+{error_files_html}
+<p><a href="/debug/clear">Clear Flags</a></p>
+<p><a href="/">Home</a></p>
+</body></html>""",
+            content_type="text/html",
+        )
+
+    def debug_clear(self, req):
+        feed_watchdog()
+        reset_debug_flags()
+        return adafruit_httpserver.Response(
+            req,
+            f"""<html><body>{self.navigation_string}
+<h2>Debug Flags Cleared</h2>
+<p>All debug flags have been reset to 0x00000000.</p>
+<p><a href="/debug">Back to Debug Status</a> | <a href="/">Home</a></p>
+</body></html>""",
+            content_type="text/html",
+        )
+
 
 pixel.fill((100, 100, 0))  # yellow
 
@@ -853,12 +1134,18 @@ except:
 print("hello world")
 print(f"fstring test {airportlist}, {len(airportlist)}")
 print("starting pix")
-pix = neopixel.NeoPixel(
-    board.A6, len(airportlist), pixel_order=neopixel.RGB, brightness=0.2
-)
-print(f"pix is: {pix}")
-init_led_string()
-pix.show()
+try:
+    pix = neopixel.NeoPixel(
+        board.A6, len(airportlist), pixel_order=neopixel.RGB, brightness=0.2
+    )
+    print(f"pix is: {pix}")
+    init_led_string()
+    pix.show()
+except Exception as e:
+    print(f"[FAIL] NeoPixel initialization failed: {e}")
+    print("[WARN] LED string disabled")
+    set_debug_flag(14)  # NeoPixel initialization failed
+    pix = None
 # print(board.A6)
 
 # wifi.radio.start_ap(ssid="mmap-1", password="goldfish")
@@ -871,12 +1158,21 @@ last_wx_check = -150
 
 pixel.fill((0, 55, 0))  # dim green
 
-
+print("[OK] Main loop started")
 while True:
     try:
+        # Feed watchdog regularly
+        feed_watchdog()
+
         # Process any waiting requests
-        if web:
-            web.poll()
+        try:
+            if web:
+                web.poll()
+        except adafruit_httpserver.exceptions.ServerStoppedError:
+            pass
+        except Exception as e:
+            print(f"[WARN] Web poll error: {e}")
+
         t = time.monotonic()  # float, nanoseconds
 
         if t - last_wifi_check > 30:
@@ -886,14 +1182,13 @@ while True:
             oled_write(web=web)
             phone_home()
 
-            # 30sec is a good interval to print errors.
+            # 30sec is a good interval to print errors
             if len(errors):
-                print("errors:", errors)
+                print(f"[WARN] Errors recorded: {len(errors)}")
 
-        if t - last_wx_check > 180:
+        if t - last_wx_check > 540:
             last_wx_check = t
             gc.collect()
-            # print("trying wx")
             try_wx()
             write_leds()
 
@@ -902,9 +1197,20 @@ while True:
             write_leds()
 
     except OSError as error:
-        print(error)
+        print(f"[WARN] OSError in main loop: {error}")
         continue
     except Exception as ex:
-        print("can't open file: ", ex)
-        error = traceback.format_exception(ex)
-        write_error(error)
+        # Non-blocking exception throttling: only log once per 5 seconds
+        current_time = time.monotonic()
+        if current_time - last_exception_time > 5:
+            print(f"[FAIL] Unhandled exception in main loop: {ex}")
+            print(traceback.format_exception(ex))
+            set_debug_flag(10)  # Main loop exception
+            try:
+                error = traceback.format_exception(ex)
+                error_str = "".join(error) if isinstance(error, list) else str(error)
+                write_error(error_str)
+            except:
+                pass
+            last_exception_time = current_time
+        continue
