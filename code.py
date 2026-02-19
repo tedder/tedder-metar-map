@@ -260,19 +260,8 @@ except Exception as e:
     set_debug_flag(5)
     requests = None
 
-# Early phone_home: check in before NTP, so a DNS/NTP hang doesn't prevent telemetry.
-# boot_count > 1 here means previous boots failed before reaching phone_home.
-phone_home()
-
-# NTP: socket_timeout covers the UDP recv, but getaddrinfo (DNS) has no timeout in CircuitPython.
-# If DNS hangs here, the watchdog will eventually reset the device; boot_count will record the attempt.
-try:
-    ntp = adafruit_ntp.NTP(hpool, tz_offset=0, socket_timeout=10)
-    _ = ntp.datetime
-    print("[OK] NTP initialized and time synced")
-except Exception as e:
-    print(f"[WARN] NTP init failed: {e}")
-    ntp = None
+# NTP initialized in boot sequence (after try_wifi) so phone_home() can fire first.
+ntp = None
 
 def write_error(errstr):
     try:
@@ -370,7 +359,7 @@ wifi_ssid = ""  # Store SSID when connected
 
 
 def phone_home():
-    global last_phone_home_mono
+    global last_phone_home_mono, boot_count
     if not wifi.radio.connected:
         return
 
@@ -825,6 +814,17 @@ def try_wifi():
         if web is not None:
             web.restart(str(wifi.radio.ipv4_address))
 
+    # Retry NTP if not yet synced (required before HTTPS/METAR fetches)
+    global ntp
+    if ntp is None:
+        try:
+            ntp = adafruit_ntp.NTP(hpool, tz_offset=0, socket_timeout=10)
+            _ = ntp.datetime
+            print("[OK] NTP synced")
+        except Exception as e:
+            print(f"[WARN] NTP retry failed: {e}")
+            ntp = None
+
     oled_write()
 
 
@@ -1193,6 +1193,21 @@ class webserver:
 pixel.fill((100, 100, 0))  # yellow
 
 try_wifi()
+
+# Early phone_home: fires before NTP so a DNS/NTP hang doesn't silence the device.
+# boot_count > 1 here means there were failed boot attempts before this one.
+phone_home()
+
+# NTP: socket_timeout covers the UDP recv, but getaddrinfo (DNS) has no timeout in CircuitPython.
+# If DNS hangs here, the watchdog resets the device and boot_count records the failed attempt.
+try:
+    ntp = adafruit_ntp.NTP(hpool, tz_offset=0, socket_timeout=10)
+    _ = ntp.datetime
+    print("[OK] NTP initialized and time synced")
+except Exception as e:
+    print(f"[WARN] NTP init failed: {e}")
+    ntp = None
+
 # hserver.start(str(wifi.radio.ipv4_address))
 web = webserver(hserver, str(wifi.radio.ipv4_address))
 
@@ -1267,10 +1282,13 @@ while True:
                 print(f"[WARN] Errors recorded: {len(errors)}")
 
         if t - last_wx_check > 540:
-            last_wx_check = t
             gc.collect()
-            try_wx()
-            write_leds()
+            if ntp is None:
+                print("[WARN] Skipping METAR fetch: NTP not synced (HTTPS requires valid clock)")
+            else:
+                last_wx_check = t
+                try_wx()
+                write_leds()
 
         if t - last_blinky > 0.05:
             last_blinky = t
