@@ -24,7 +24,7 @@ import gc
 import ipaddress
 import microcontroller
 
-FIRMWARE_VERSION = "1.2.9"
+FIRMWARE_VERSION = "2.0.2"
 TMM_VERSION = "v1.1.7"
 
 # Build user agent string with CircuitPython version
@@ -33,6 +33,8 @@ try:
     USER_AGENT = f"tedder-metar-map/{FIRMWARE_VERSION} circuitpython/{cp_version}"
 except:
     USER_AGENT = f"tedder-metar-map/{FIRMWARE_VERSION} circuitpython/unknown"
+
+METAR_SERVICE_URL = "http://fly.tedder.me/metar"
 
 WEB_PORT = 80
 
@@ -142,6 +144,11 @@ try:
 except Exception:
     pass
 print(f"[INFO] Boot count: {boot_count}")
+
+try:
+    BOARD_UID = microcontroller.cpu.uid.hex()[:12] if hasattr(microcontroller.cpu.uid, 'hex') else ""
+except Exception:
+    BOARD_UID = ""
 
 def set_debug_flag(bit):
     global debug_flags
@@ -451,17 +458,9 @@ def oled_write(line3="", line4="", error=None, web=None):
         time_str = f"{nowstruct.tm_hour:02d}:{nowstruct.tm_min:02d}" if nowstruct else "--:--"
         line2 = f"apts:{len(airportlist)} {time_str}"
 
-        now_epoch = get_now()
-        newest_metar = 0
-        for icao, aw in airportwx.items():
-            aw = airportwx.get(icao, {})
-            metar_time = aw.get("report_time", None)
-            if metar_time:
-                newest_metar = max(newest_metar, metar_time)
-
-        if now_epoch and newest_metar and newest_metar > 0:
-            newest_metar_mins = (now_epoch - newest_metar) / 60
-            line2 += f"/{newest_metar_mins:.0f}m"
+        ages = [aw.get("age_mins") for aw in airportwx.values() if aw.get("age_mins") is not None]
+        if ages:
+            line2 += f"/{min(ages):.0f}m"
 
         display.fill(0)
         display.text(line1, 0, 0, 1)
@@ -484,95 +483,6 @@ def load_airports():
     if len(airports) == 0:
         return ["NEED", "CONFIG"]
     return airports
-
-
-# as a reminder, category:
-# VFR > 3000ft & 5mi
-# MVFR 1-3k and/or 3-5mi
-# IFR 500 to <1000 and/or 1-3mi
-# LIFR < 500 and/or < 1mi
-
-
-# this is fully tested in the unit tests.
-# TODO: test with None values of viz_miles
-# TODO: test with array of clouds
-# aim 7-1-14, the ceiling is BKN or OVC. In other words, SKC (0/0), FEW (<=2/8), and SCT (<=4/8) can be ignored.
-# OVX = vertical visibility/fog problems
-#  curl --silent 'https://aviationweather.gov/api/data/metar?format=json&ids=' | jq ".[].clouds|.[].cover" | egrep -v "SCT|BKN|OVC|FEW|CLR|CAVOK|OVX"
-
-
-def is_actual_cloud_layer(layer):
-    # print("hello islayer", layer)
-    cov = layer.get("cover")
-    # print("cov", cov)
-    if not cov:
-        print(f"** no value for cover. layer: {layer}")
-        return False
-    if cov in ["SKC", "FEW", "SCT", "CLR", "CAVOK"]:
-        # print("not cov")
-        return False
-    if cov in ["OVC", "BKN", "OVX"]:
-        # ovx is nonstandard, it's basically "low vertical visiblity".
-        return True
-    print(f"** unknown cover value: {layer}")
-    return False
-
-
-def get_lowest_cloud_height(clouds: list):
-    if not clouds or not len(clouds):
-        return None
-
-    # print("clouds: ", clouds)
-
-    # circuitpython doesn't support the default option of the next function, this is cleaner.
-    actual_cloud_layers = [layer for layer in clouds if is_actual_cloud_layer(layer)]
-    first_actual_cloud_layer = None
-    if actual_cloud_layers:
-        first_actual_cloud_layer = actual_cloud_layers[0]
-    # print(f"first layer: {first_actual_cloud_layer}")
-    if not first_actual_cloud_layer:
-        return None
-    return first_actual_cloud_layer["base"]
-
-
-def flight_category(viz_miles, clouds: list):
-    cloud_height = get_lowest_cloud_height(clouds)
-
-    # print(type(cloud_height), cloud_height)
-    if (viz_miles != None and viz_miles < 1) or (
-        cloud_height != None and cloud_height < 500
-    ):
-        return "LIFR"
-    elif (viz_miles != None and viz_miles < 3) or (
-        cloud_height != None and cloud_height < 1000
-    ):
-        return "IFR"
-    elif (viz_miles != None and viz_miles < 5) or (
-        cloud_height != None and cloud_height < 3000
-    ):
-        return "MVFR"
-    else:
-        return "VFR"
-
-
-def visib_miles(v, icao=""):
-    if v is None:
-        print(f"VISIBILITY NONE {icao}")
-        return v
-    # already an int, cool!
-    if isinstance(v, int):
-        return v
-    if isinstance(v, float):
-        return v
-    if v == "10+":
-        return 10
-
-    if m := re.match(r"\d+", v):
-        print(f"matched: {m}")
-        return int(v)
-    else:
-        print(f"UNKNOWN VISIBILITY: {v}  {icao}")
-    return v
 
 
 def tuple_to_hex_str(x):
@@ -621,47 +531,6 @@ def write_leds(leds_changed=False):
         pix.show()
 
 
-def led_color(flight_cat):
-    if flight_cat == "VFR":
-        return (0, 127, 0)  # green
-    elif flight_cat == "MVFR":
-        return (0, 0, 127)  # blue
-    elif flight_cat == "IFR":
-        return (127, 0, 0)  # red
-    elif flight_cat == "LIFR":
-        return (255,22,199)  # pink
-    # else:
-    return (255, 255, 0)  # yellow
-
-
-def process_airport(metar):
-    icao = metar.get("icaoId")
-    if debug > 8:
-        print("metar: ", metar)
-    viz_miles = visib_miles(metar.get("visib"), icao)
-    if debug > 4:
-        print("clouds: ", metar.get("clouds"))
-
-    flight_cat = flight_category(viz_miles, metar.get("clouds", None))
-    if debug > 6:
-        print(f"{icao}: {fcat:>4s} {viz_miles:4.1f} {cloud_height}")
-
-    # write_led(icao, fcat, metar.get("reportTime"))
-    led_n = airportlist.index(icao)
-    ledc = led_color(flight_cat)
-    if debug > 4:
-        print(f"{led_n}={icao}={flight_cat}={ledc}")
-
-    airportwx[icao] = {
-        "cat": flight_cat,
-        "last_update": datetime.now(),
-        "report_time": metar.get("obsTime", None),
-    }
-    print(f"{icao} led_n: {led_n} // lslen: {len(ledstate)}")
-    ledstate[led_n]["base_color"] = ledc
-    ledstate[led_n]["actual_color"] = ledc
-
-
 def is_valid_airport(x):
     if not x:
         return False
@@ -674,8 +543,6 @@ def is_valid_airport(x):
     return True
 
 
-BATCH_SIZE = 10
-
 memory_error_count = 0
 
 def try_wx():
@@ -683,64 +550,77 @@ def try_wx():
     global requests
     feed_watchdog()
     airport_ids = [x for x in airportlist if is_valid_airport(x)]
+    if not airport_ids:
+        return
 
-    # batch BATCH_SIZE at a time
-    while True:
-        if len(airport_ids) == 0:
-            break
-        this_airport_ids = ",".join(airport_ids[:BATCH_SIZE])
-        airport_ids = airport_ids[BATCH_SIZE:]
-        print(f"[*] METAR fetch: {this_airport_ids}")
-        ret = None
+    url = f"{METAR_SERVICE_URL}?ids={','.join(airport_ids)}&boardid={BOARD_UID}&output=csv&debug=0x{debug_flags:x}"
+    print(f"[*] METAR fetch: {url}")
+    ret = None
 
-        try:
-            avurl = f"https://aviationweather.gov/api/data/metar?format=json&ids={this_airport_ids}"
-            print(f"[*] URL: {avurl}")
-            gc.collect()
-            ret = requests.get(avurl)
-            print(f"[OK] HTTP {ret.status_code}")
-            clear_debug_flag(5)  # Clear HTTP error flag on success
-        except adafruit_requests.OutOfRetries as ex:
-            print(f"[FAIL] HTTP: Out of retries: {ex}")
-            set_debug_flag(5)  # HTTP request exception
-            return
-        except RuntimeError as ex:
-            print(f"[FAIL] HTTP: RuntimeError: {ex}")
-            set_debug_flag(5)
-            return
-        except MemoryError as ex:
-            memory_error_count += 1
-            print(f"[WARN] Memory error during METAR fetch")
-            set_debug_flag(12)  # Memory error
-            gc.collect()
-            if memory_error_count > 5:
-                memory_error_count = 1
-                requests = None
-                gc.collect()
-                requests = adafruit_requests.Session(hpool, ssl.create_default_context())
-            return
-        except Exception as ex:
-            print(f"[FAIL] HTTP: Unexpected error: {ex}")
-            set_debug_flag(5)
-            return
-
-        try:
-            for metar in ret.json():
-                if debug > 8:
-                    print(f"[*] METAR: {metar}")
-                process_airport(metar)
-            clear_debug_flag(3)  # Clear METAR parse error flag on success
-        except Exception as ex:
-            print(f"[FAIL] JSON parse error: {ex}")
-            set_debug_flag(3)  # METAR fetch failed
-
-        if ret:
-            try:
-                ret.close()
-            except:
-                pass
+    try:
         gc.collect()
+        ret = requests.get(url)
+        print(f"[OK] HTTP {ret.status_code}")
+        clear_debug_flag(5)
+    except adafruit_requests.OutOfRetries as ex:
+        print(f"[FAIL] HTTP: Out of retries: {ex}")
+        set_debug_flag(5)
+        return
+    except RuntimeError as ex:
+        print(f"[FAIL] HTTP: RuntimeError: {ex}")
+        set_debug_flag(5)
+        return
+    except MemoryError as ex:
+        memory_error_count += 1
+        print(f"[WARN] Memory error during METAR fetch")
+        set_debug_flag(12)
+        gc.collect()
+        if memory_error_count > 5:
+            memory_error_count = 1
+            requests = None
+            gc.collect()
+            requests = adafruit_requests.Session(hpool, ssl.create_default_context())
+        return
+    except Exception as ex:
+        print(f"[FAIL] HTTP: Unexpected error: {ex}")
+        set_debug_flag(5)
+        return
 
+    try:
+        for line in ret.text.strip().split('\n'):
+            if not line:
+                continue
+            parts = line.split(',')
+            if len(parts) < 5:
+                continue
+            icao = parts[0]
+            if icao not in airportlist:
+                continue
+            cat = parts[1] or None
+            r, g, b = [int(x) for x in parts[2].split('-')]
+            ledc = (r, g, b)
+            age_mins = int(parts[3]) if parts[3] else None
+            stale = parts[4].strip() == '1'
+            led_n = airportlist.index(icao)
+            ledstate[led_n]["base_color"] = ledc
+            ledstate[led_n]["actual_color"] = ledc
+            airportwx[icao] = {
+                "cat": cat,
+                "last_update": datetime.now(),
+                "age_mins": age_mins,
+                "stale": stale,
+            }
+        clear_debug_flag(3)
+    except Exception as ex:
+        print(f"[FAIL] Response parse error: {ex}")
+        set_debug_flag(3)
+
+    if ret:
+        try:
+            ret.close()
+        except:
+            pass
+    gc.collect()
     print("[OK] METAR fetch complete")
     write_leds(True)
 
@@ -959,21 +839,17 @@ class webserver:
                 else:
                     ledstate[led_n]["blink_interval"] = 0
 
-        now_epoch = get_now()
-
         def body():
             yield f"""{self.page_header}{self.navigation_string}<table>"""
 
             for led_n in range(0, len(airportlist)):
-                #        a in airportlist:
                 icao = airportlist[led_n]
                 aw = airportwx.get(icao, {})
 
                 metar_age = ""
-                metar_time = aw.get("report_time", None)
-                if metar_time and now_epoch:
-                    age_mins = (now_epoch - metar_time) / 60
-                    metar_age = f"{age_mins:.1f} mins"
+                age_mins = aw.get("age_mins")
+                if age_mins is not None:
+                    metar_age = f"{age_mins} mins"
 
                 blinking = ""
                 if ledstate[led_n].get("blink_interval", 0) > 0:
@@ -1282,13 +1158,10 @@ while True:
                 print(f"[WARN] Errors recorded: {len(errors)}")
 
         if t - last_wx_check > 540:
+            last_wx_check = t
             gc.collect()
-            if ntp is None:
-                print("[WARN] Skipping METAR fetch: NTP not synced (HTTPS requires valid clock)")
-            else:
-                last_wx_check = t
-                try_wx()
-                write_leds()
+            try_wx()
+            write_leds()
 
         if t - last_blinky > 0.05:
             last_blinky = t
