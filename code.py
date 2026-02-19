@@ -24,7 +24,7 @@ import gc
 import ipaddress
 import microcontroller
 
-FIRMWARE_VERSION = "1.2.6"
+FIRMWARE_VERSION = "1.2.9"
 TMM_VERSION = "v1.1.7"
 
 # Build user agent string with CircuitPython version
@@ -86,6 +86,9 @@ airportlist = []
 airportwx = {}
 ledstate = []
 errors = []
+web = None
+
+MAX_ERRORS = 20
 
 debug = 1
 # debug 0 == stfu
@@ -110,6 +113,7 @@ debug = 1
 # Bit 12: 0x1000 = Memory error
 # Bit 13: 0x2000 = IPv6 error/incompatibility
 # Bit 14: 0x4000 = NeoPixel initialization failed
+# Bit 15: 0x8000 = Watchdog reset (set on startup if previous reset was watchdog)
 
 debug_flags = 0
 try:
@@ -122,6 +126,22 @@ except Exception as e:
     except:
         pass
     debug_flags = 0
+
+# Boot counter in NVM bytes 4-7: incremented every boot, cleared only after successful phone_home.
+# If phone_home sees boot_count > 1, the device had N-1 failed boot attempts before this one.
+boot_count = 0
+try:
+    boot_count = struct.unpack("<I", microcontroller.nvm[4:8])[0] if hasattr(microcontroller, 'nvm') else 0
+    if boot_count > 10000:  # sanity check for corrupted NVM
+        boot_count = 0
+except Exception:
+    boot_count = 0
+boot_count += 1
+try:
+    microcontroller.nvm[4:8] = struct.pack("<I", boot_count)
+except Exception:
+    pass
+print(f"[INFO] Boot count: {boot_count}")
 
 def set_debug_flag(bit):
     global debug_flags
@@ -147,6 +167,25 @@ def reset_debug_flags():
         microcontroller.nvm[0:4] = struct.pack("<I", 0)
     except:
         pass
+
+# Capture reset reason from the previous boot
+_reset_reason = "unknown"
+try:
+    _reset_reason = str(supervisor.runtime.reset_reason)
+except Exception:
+    try:
+        _reset_reason = str(microcontroller.cpu.reset_reason)
+    except Exception:
+        pass
+print(f"[INFO] Reset reason: {_reset_reason}")
+if "watchdog" in _reset_reason.lower():
+    set_debug_flag(15)
+
+def add_error(errstr):
+    global errors
+    errors.append(errstr)
+    if len(errors) > MAX_ERRORS:
+        errors = errors[-MAX_ERRORS:]
 
 def feed_watchdog():
     if sys.implementation.name.lower() != "cpython" and watchdog_enabled:
@@ -211,15 +250,8 @@ except Exception as e:
     print(f"[FAIL] HTTP server init failed: {e}")
     hserver = None
 
-try:
-    ntp = adafruit_ntp.NTP(hpool, tz_offset=0)
-    # Force NTP to fetch time NOW (before SSL context creation)
-    _ = ntp.datetime
-    print("[OK] NTP initialized and time synced")
-except Exception as e:
-    print(f"[WARN] NTP init failed: {e}")
-    ntp = None
-
+# Initialize requests before NTP so we can phone_home before the potentially-blocking NTP sync.
+# Plain HTTP session is sufficient for phone_home (am.colo uses HTTP).
 try:
     requests = adafruit_requests.Session(hpool, ssl.create_default_context())
     print("[OK] Requests session initialized")
@@ -227,6 +259,20 @@ except Exception as e:
     print(f"[FAIL] Requests init failed: {e}")
     set_debug_flag(5)
     requests = None
+
+# Early phone_home: check in before NTP, so a DNS/NTP hang doesn't prevent telemetry.
+# boot_count > 1 here means previous boots failed before reaching phone_home.
+phone_home()
+
+# NTP: socket_timeout covers the UDP recv, but getaddrinfo (DNS) has no timeout in CircuitPython.
+# If DNS hangs here, the watchdog will eventually reset the device; boot_count will record the attempt.
+try:
+    ntp = adafruit_ntp.NTP(hpool, tz_offset=0, socket_timeout=10)
+    _ = ntp.datetime
+    print("[OK] NTP initialized and time synced")
+except Exception as e:
+    print(f"[WARN] NTP init failed: {e}")
+    ntp = None
 
 def write_error(errstr):
     try:
@@ -296,7 +342,7 @@ def get_now_struct():
     except socketpool.SocketPool.gaierror as ex:
         print(f"[WARN] NTP gaierror: {ex}")
         set_debug_flag(6)
-        errors.append(str(ex))
+        add_error(str(ex))
         write_error(str(ex))
         return None
     except OSError as ex:
@@ -318,23 +364,23 @@ def get_now():
     return
 
 
-last_phone_home = 0
+last_phone_home_mono = 0  # monotonic time of last phone_home (not NTP-dependent)
 last_exception_time = 0  # For non-blocking exception throttling
 wifi_ssid = ""  # Store SSID when connected
 
 
 def phone_home():
-    global last_phone_home
+    global last_phone_home_mono
     if not wifi.radio.connected:
         return
 
-    uptime_seconds = time.monotonic_ns() // 1_000_000_000
-
-    now_epoch = get_now()
-    if last_phone_home and now_epoch and (now_epoch - last_phone_home) < 3600:
+    now_mono = time.monotonic()
+    if last_phone_home_mono and (now_mono - last_phone_home_mono) < 3600:
         return
-    else:
-        last_phone_home = now_epoch
+    last_phone_home_mono = now_mono
+
+    uptime_seconds = time.monotonic_ns() // 1_000_000_000
+    now_epoch = get_now()
 
     # Check in to generic-sink with device telemetry
     try:
@@ -355,6 +401,8 @@ def phone_home():
             "wifi_ip": str(wifi.radio.ipv4_address) if wifi.radio.ipv4_address else "0.0.0.0",
             "ntp_synced": ntp is not None,
             "debug_flags": f"0x{debug_flags:x}",
+            "reset_reason": _reset_reason,
+            "boot_count": boot_count,
             "user_agent": USER_AGENT
         }
 
@@ -369,6 +417,12 @@ def phone_home():
         print(f"[OK] Device check-in sent, response: {ret.status_code}")
         ret.close()
         gc.collect()
+        # Successful check-in: clear boot counter so next boot starts fresh at 1
+        try:
+            microcontroller.nvm[4:8] = struct.pack("<I", 0)
+            boot_count = 1
+        except Exception:
+            pass
     except Exception as ex:
         print(f"[WARN] Device check-in failed: {ex}")
         pass
@@ -387,27 +441,26 @@ def oled_write(line3="", line4="", error=None, web=None):
     try:
         if error:
             _error = error
-            errors.append(error)
+            add_error(error)
             if web:
                 web.errors.append(error)
+                if len(web.errors) > MAX_ERRORS:
+                    web.errors = web.errors[-MAX_ERRORS:]
         if _error:
-            line3 = _error[:30]
-            line4 = _error[30:]
+            line3 = _error[:21]
 
         if not line3:
-            nowstruct = get_now_struct()
-            if nowstruct:
-                line3 = f"t: {nowstruct.tm_hour:02d}:{nowstruct.tm_min:02d}"
-        if not line4:
-            line4 = FIRMWARE_VERSION
+            line3 = f"0x{debug_flags:x} {FIRMWARE_VERSION}"
             if memory_error_count > 0:
-              line4 += f"; {memory_error_count}me"
+                line3 += f";{memory_error_count}me"
 
-        oled_txt = ["NO WIFI", "", line3, line4]
-        if wifi.radio.connected:
-            oled_txt[0] = f"IP: {wifi.radio.ipv4_address}"
+        # Line 1: WiFi/IP
+        line1 = f"IP: {wifi.radio.ipv4_address}" if wifi.radio.connected else "NO WIFI"
 
-        oled_txt[1] = f"apts: {len(airportlist)}"
+        # Line 2: apts + time combined
+        nowstruct = get_now_struct()
+        time_str = f"{nowstruct.tm_hour:02d}:{nowstruct.tm_min:02d}" if nowstruct else "--:--"
+        line2 = f"apts:{len(airportlist)} {time_str}"
 
         now_epoch = get_now()
         newest_metar = 0
@@ -419,13 +472,12 @@ def oled_write(line3="", line4="", error=None, web=None):
 
         if now_epoch and newest_metar and newest_metar > 0:
             newest_metar_mins = (now_epoch - newest_metar) / 60
-            oled_txt[1] += f"; {newest_metar_mins:.0f}m"
+            line2 += f"/{newest_metar_mins:.0f}m"
 
         display.fill(0)
-        display.text(oled_txt[0], 0, 0, 1)
-        display.text(oled_txt[1], 0, 8, 1)
-        display.text(oled_txt[2], 0, 16, 1)
-        display.text(oled_txt[3], 0, 24, 1)
+        display.text(line1, 0, 0, 1)
+        display.text(line2, 0, 11, 1)
+        display.text(line3, 0, 22, 1)
         display.show()
     except Exception as e:
         print(f"[FAIL] OLED update error: {e}")
@@ -705,7 +757,9 @@ def try_wx():
 
 
 def try_wifi():
+    global requests, web
     feed_watchdog()
+    did_reconnect = False
     if not wifi.radio.connected:
         ssid = os.getenv("CIRCUITPY_WIFI_SSID", "")
         pw = os.getenv("CIRCUITPY_WIFI_PASSWORD", "")
@@ -724,6 +778,7 @@ def try_wifi():
             wifi.radio.connect(ssid, pw, timeout=30)
             global wifi_ssid
             wifi_ssid = ssid
+            did_reconnect = True
             print(f"[OK] WiFi connected to {ssid}")
             # Clear LED when WiFi reconnects (keep debug flag though)
             if pixel:
@@ -757,6 +812,18 @@ def try_wifi():
             print(f"[WARN] DNS setting failed: {ex}")
 
     print(f"[OK] WiFi: {wifi.radio.ipv4_address}, DNS: {wifi.radio.ipv4_dns}, flags: 0x{debug_flags:x}")
+
+    if did_reconnect:
+        print("[*] WiFi reconnected - reinitializing network state")
+        try:
+            requests = None
+            gc.collect()
+            requests = adafruit_requests.Session(hpool, ssl.create_default_context())
+            print("[OK] Requests session reinitialized after reconnect")
+        except Exception as ex:
+            print(f"[WARN] Requests reinit failed: {ex}")
+        if web is not None:
+            web.restart(str(wifi.radio.ipv4_address))
 
     oled_write()
 
@@ -842,6 +909,19 @@ class webserver:
         # yes, the ip can be the string "None"
         if ip_address and ip_address != "None":
             self._wserver.start(ip_address, WEB_PORT)
+
+    def restart(self, ip_address):
+        try:
+            self._wserver.stop()
+            print("[OK] HTTP server stopped for restart")
+        except Exception as e:
+            print(f"[WARN] HTTP server stop failed: {e}")
+        if ip_address and ip_address != "None":
+            try:
+                self._wserver.start(ip_address, WEB_PORT)
+                print(f"[OK] HTTP server restarted on {ip_address}:{WEB_PORT}")
+            except Exception as e:
+                print(f"[WARN] HTTP server restart failed: {e}")
 
     def poll(self):
         # print(f"calling poll on {self._wserver}")
