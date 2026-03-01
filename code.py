@@ -34,7 +34,7 @@ except ImportError:
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-FIRMWARE_VERSION = "2.0.8"
+FIRMWARE_VERSION = "2.0.10"
 TMM_VERSION = "v1.1.7"
 METAR_SERVICE_URL = "http://fly.tedder.me/metar"
 WEB_PORT = 80
@@ -45,6 +45,14 @@ try:
     USER_AGENT = f"tedder-metar-map/{FIRMWARE_VERSION} circuitpython/{cp_version}"
 except Exception:
     USER_AGENT = f"tedder-metar-map/{FIRMWARE_VERSION} circuitpython/unknown"
+
+if sys.implementation.version[0] < 10:
+    try:
+        import neopixel, board
+        neopixel.NeoPixel(board.NEOPIXEL, 1).fill((255, 80, 0))
+    except Exception:
+        pass
+    raise RuntimeError(f"CircuitPython 10.0+ required, got {cp_version}")
 
 # ── Global state ──────────────────────────────────────────────────────────────
 
@@ -388,21 +396,19 @@ def try_wifi():
     if debug > 4:
         print(f"[OK] WiFi IP: {wifi.radio.ipv4_address}")
 
-    try:
-        if len(os.getenv("OVERRIDE_DNS", "")) > 0:
-            wifi.radio.ipv4_dns = ipaddress.ip_address(os.getenv("OVERRIDE_DNS", ""))
-        else:
+    # CP 9.2+ fixed IPv6 RDNSS overwriting DHCP DNS, so prefer DHCP-provided DNS.
+    # Fall back to 1.1.1.1 only if DHCP didn't provide one, or use OVERRIDE_DNS if set.
+    override = os.getenv("OVERRIDE_DNS", "")
+    if override:
+        try:
+            wifi.radio.ipv4_dns = ipaddress.ip_address(override)
+        except Exception as ex:
+            print(f"[WARN] DNS override failed: {ex}")
+    elif wifi.radio.ipv4_dns is None:
+        try:
             wifi.radio.ipv4_dns = ipaddress.ip_address("1.1.1.1")
-    except (OSError, AttributeError) as ex:
-        error_str = str(ex).lower()
-        if "ipv6" in error_str or "address family" in error_str or "not supported" in error_str:
-            print(f"[FAIL] IPv6 incompatibility detected: {ex}")
-            set_debug_flag(13)
-            if pixel:
-                pixel.fill((138, 43, 226))
-            oled_write("IPv6 error")
-        else:
-            print(f"[WARN] DNS setting failed: {ex}")
+        except Exception as ex:
+            print(f"[WARN] DNS fallback failed: {ex}")
 
     print(f"[OK] WiFi: {wifi.radio.ipv4_address}, DNS: {wifi.radio.ipv4_dns}, flags: 0x{debug_flags:x}")
 
@@ -795,7 +801,7 @@ except Exception as e:
 
 last_blinky = 0
 last_wifi_check = 0
-last_wx_check = -150  # triggers first fetch ~30s after startup
+last_wx_check = -495  # triggers first fetch ~45s after startup
 
 if pixel:
     pixel.fill((0, 55, 0))  # dim green
