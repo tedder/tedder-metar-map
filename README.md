@@ -30,13 +30,42 @@ The v1 hardware for this is about $25 ($10ish for the carrier board, $12 for the
 
 [Install circuitpython](https://learn.adafruit.com/adafruit-qt-py-esp32-s2/circuitpython) on [qtpy esp32-s2](https://www.adafruit.com/product/5325):
 
-1. [download circuitpython uf2](https://circuitpython.org/board/adafruit_qtpy_esp32s2/)
+1. [download circuitpython uf2](https://circuitpython.org/board/adafruit_qtpy_esp32s2/) (10.0 or later required)
 1. press reset button
 1. when RGB LED turns purple, press reset button again (about a half second later? almost a double-click)
 1. note QTPYS2BOOT mounted folder on success
 1. copy latest circuitpython uf2 to this folder
 1. qtpy will auto-disconnect and remount as CIRCUITPY
-1. run `install.sh` to copy the proper files
+
+### install libraries
+
+Install [circup](https://github.com/adafruit/circup) if you don't have it:
+```
+pip install circup
+```
+
+Then install the required libraries:
+```
+circup install neopixel adafruit_requests adafruit_datetime adafruit_httpserver adafruit_ssd1306 adafruit_ntp adafruit_framebuf adafruit_pixelbuf adafruit_bus_device adafruit_connection_manager
+```
+
+### configure
+
+Copy `settings.toml.example` to `settings.toml` and fill in your WiFi credentials:
+```
+cp settings.toml.example /Volumes/CIRCUITPY/settings.toml
+```
+
+Create an `airports.txt` file on the device with one ICAO code per line, in LED order.
+Use `OFF` for unused LEDs, `OFF_LEGEND` for legend LEDs. See `airports.txt.ted` for an example.
+
+### deploy
+
+```
+cp code.py /Volumes/CIRCUITPY/code.py
+```
+
+CircuitPython reloads automatically on file write.
 
 
 
