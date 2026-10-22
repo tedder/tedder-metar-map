@@ -1,4 +1,4 @@
-CFLAGS = -Wall -Wextra -Werror -std=c11 -g -fsanitize=address,undefined
+CFLAGS = -Wall -Wextra -Werror -std=gnu17 -g -fsanitize=address,undefined
 
 .PHONY: test
 test: test_captive_dns test_tx_tune test_radio_verdict test_airports

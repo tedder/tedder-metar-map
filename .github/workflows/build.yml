@@ -8,14 +8,14 @@ jobs:
   host-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: make -C c/test
 
   firmware:
     runs-on: ubuntu-latest
     container: espressif/idf:v6.0.2
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: build (unsigned compile check, sdkconfig.ci)
         working-directory: c
         shell: bash

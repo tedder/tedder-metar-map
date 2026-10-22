@@ -2806,7 +2806,7 @@ static esp_err_t handler_root(httpd_req_t *req)
             "<tr><td>LED test</td><td>",
             ledw, s_bri_idx == 0 ? " disabled" : "", bri_label(s_bri_idx),
             s_bri_idx == 8 ? " disabled" : "",
-            bri_effective() != s_bri_idx ? " — night dimming now (a press cancels it until morning)" : "");
+            bri_effective() != s_bri_idx ? " — night dimming now (+ or &minus; cancels it until morning)" : "");
     static const char *const pat[][2] = { { "colors", "Colors" }, { "order", "Order" },
                                           { "categories", "Categories" } };
     for (int k = 0; k < 3; k++)

@@ -15,6 +15,7 @@ simpler than a Pi, has less fussy power requirements, and is thin enough to wall
 The original CircuitPython version has been removed. It's in the git history (last
 version at commit `6763be1`) if you need it.
 
+- **Using a map** (setup, WiFi, airport list, what the lights mean): [docs/users-guide.md](docs/users-guide.md)
 - **Every setting**, the remote config file, debug flags, telemetry: [docs/config-options.md](docs/config-options.md)
 - **Firmware internals**: [c/NOTES.md](c/NOTES.md)
 
