@@ -1,0 +1,5 @@
+test_captive_dns
+test_radio_verdict
+test_tx_tune
+*.dSYM/
+test_airports

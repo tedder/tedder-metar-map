@@ -1,6 +1,9 @@
 build/
+build-*/
 sdkconfig
 sdkconfig.old
 managed_components/
 .cache/
 .claude/
+signing-key.pem
+__pycache__/

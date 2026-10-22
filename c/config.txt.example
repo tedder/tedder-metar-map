@@ -1,3 +1,0 @@
-# Copy to /fatfs/config.txt on device (created automatically on first boot with defaults).
-WIFI_SSID=your-network
-WIFI_PASS=your-password

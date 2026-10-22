@@ -7,7 +7,7 @@ A wall map with one LED per airport. Each LED shows the airport's flight categor
 [Adafruit QT Py ESP32-S2](https://www.adafruit.com/product/5325) running ESP-IDF
 firmware (`c/`). Weather comes from a small service (`fly.tedder.me/metar`) that
 fetches METARs for a list of airports and returns one CSV line per airport with the
-category and the LED color, so the device does no METAR parsing.
+category and the LED color, so the map does no METAR parsing.
 
 The v1 hardware is about $25 ($10ish for the carrier board, $12 for the QT Py). It's
 simpler than a Pi, has less fussy power requirements, and is thin enough to wall-mount.
@@ -15,70 +15,95 @@ simpler than a Pi, has less fussy power requirements, and is thin enough to wall
 The original CircuitPython version has been removed. It's in the git history (last
 version at commit `6763be1`) if you need it.
 
+- **Every setting**, the remote config file, debug flags, telemetry: [docs/config-options.md](docs/config-options.md)
+- **Firmware internals**: [c/NOTES.md](c/NOTES.md)
+
 ## Hardware
 
 | Part | Pin |
 |------|-----|
-| WS2812 LED string | GPIO 5 (up to 74 LEDs, set in `c/main/main.c`) |
+| WS2812/SK6812 LED string (RGB or RGBW, any color order) | GPIO 5 (A3) by default; up to 200 LEDs |
 | SSD1306 OLED 128×32 (optional) | I2C, SDA GPIO 7 / SCL GPIO 6 |
+| BOOT button | on the QT Py; unlocks saving, opens setup |
+| status NeoPixel | on the QT Py |
 
-4MB flash, 2MB PSRAM (PSRAM is needed for TLS and the FAT filesystem to fit together).
+4MB flash, 2MB PSRAM. The LED count comes from the airport list, and the color order,
+chip type and data pin are settings, so one firmware fits every map.
+
+## Features
+
+- Setup network `metarmap-XXXXXX` with a captive page for WiFi and the airport list; up to
+  three saved networks; falls back to the setup network when WiFi is gone for 5 minutes.
+- Status page at `http://metarmap.local/`: weather per LED, brightness, LED tests, Find an LED.
+- Signed OTA updates with a beta and a stable channel, partial downloads, and rollback: a new
+  version that can't fetch weather goes back to the old one by itself.
+- Per-map remote config file (maintainer), so settings can change without visiting the map.
+- Night dimming (NTP + time zone), per-category color overrides, brightness 0–8.
+- WiFi transmit power autotune and an antenna check for flaky boards.
+- Crash summary and a warning/error log kept in RAM for the status page.
 
 ## Build
 
-Needs [ESP-IDF](https://docs.espressif.com/projects/esp-idf/) 5.5 or later (builds on 6.0.2).
+Needs [ESP-IDF](https://docs.espressif.com/projects/esp-idf/) 5.5 or later (built and tested
+on 6.0.2).
+
+Release images are signed. With the signing key (`c/signing-key.pem`, not in git):
 
 ```
 cd c
-idf.py set-target esp32s2
 idf.py build
 ```
+
+Without it (anyone else, and CI) build an unsigned image:
+
+```
+cd c
+idf.py -B build-ci -DSDKCONFIG=build-ci/sdkconfig \
+  -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.ci" build
+```
+
+An unsigned image works, but takes no OTA updates (OTA trusts the key the running image was
+signed with). For your own maps, make your own key, point `firmware_base_url` at your own
+server, and sign with that.
+
+Host unit tests (airport list and weather parsing, captive DNS, TX power autotune, radio
+check): `make -C c/test`.
 
 If `sdkconfig.defaults` changes, delete `sdkconfig` and rebuild.
 
 ## Flash
 
-Put the QT Py in bootloader mode: hold BOOT while plugging in USB. Then:
+A new board, or one that ran firmware older than 0.5.0 (the partition table changed), needs
+one USB flash. Hold BOOT while plugging in USB, then:
 
 ```
+cd c
 idf.py -p /dev/cu.usbmodemXXXX flash
 ```
 
-"Device not configured" at the very end of a flash is harmless; everything has been
-written by then.
+or, to flash a released image and preload WiFi and the airport list in one step:
 
-## Configure
+```
+tools/provision.py --port /dev/cu.usbmodemXXXX --airports my-airports.txt --ssid "WiFi" --pass "..."
+```
 
-Settings live in files on the device's FAT partition:
+After that, updates arrive over WiFi.
 
-| File | Contents |
-|------|----------|
-| `config.txt` | `WIFI_SSID=...` and `WIFI_PASS=...` (see `c/config.txt.example`) |
-| `airports.txt` | one ICAO code per line, in LED order. `OFF`, `OFF_LEGEND` or `NULL` leave that LED dark. See `c/airports.txt.example`. |
-| `errors.txt` | log written by the firmware |
+## Maintainer tools (`c/tools/`)
 
-Two ways to edit them:
+Site-specific settings come from environment variables (`TMM_S3`, `AWS_PROFILE`, ...;
+see `c/tools/tmm_env.py`).
 
-- **Web page:** `http://<device IP>/config` (WiFi and airports).
-- **USB drive:** on `http://<device IP>/usb`, switch storage to USB mode. The device
-  then shows up on the computer as a drive named METARMAP. Edit the files, eject,
-  and switch back to app mode (or reboot).
-
-## Web pages
-
-| Path | What |
+| Tool | What |
 |------|------|
-| `/` | status: firmware version, board ID, fetch counts |
-| `/airports` | each LED: airport, category, report age |
-| `/config` | WiFi and airport list |
-| `/debug` | debug flags and last error |
-| `/log` | `errors.txt` |
-| `/usb` | switch storage between the firmware and USB |
-
-## Updates
-
-The firmware checks for a new build over HTTPS (`esp_https_ota`) every 8 weather
-fetches (about 72 minutes) and installs it if the version differs.
+| `provision.py` | flash a released or local image plus an NVS image with WiFi, airports and LED settings |
+| `nvs_set.py` | change single NVS keys over USB, keeping the rest |
+| `push_config.py` | write a map's remote config file (checked with the firmware's rules) |
+| `promote.py` | copy the beta image to stable after checking version and signature |
+| `ota_upload.sh` | build step: upload a changed image to the beta channel |
+| `admin_phrase.py` | per-map admin phrase for changing the update URLs on the setup page |
+| `radio_check.py` | run the antenna check and print the result |
+| `serial_log.py` | capture the USB serial log |
 
 ## License
 

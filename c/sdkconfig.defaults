@@ -1,35 +1,48 @@
-CONFIG_PARTITION_TABLE_CUSTOM=y
-CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
-CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
-CONFIG_PARTITION_TABLE_OFFSET=0x8000
-CONFIG_LOG_DEFAULT_LEVEL_INFO=y
-
-# QT Py ESP32-S2 modules are typically 4MB; FAT + app need > 2MB total flash.
+CONFIG_IDF_TARGET="esp32s2"
+CONFIG_FREERTOS_HZ=1000
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 
-# TinyUSB MSC — same FAT volume as firmware (see tmm_msc.c); mount path must match FS_MOUNT_POINT in main.c
-CONFIG_TINYUSB_MSC_ENABLED=y
-CONFIG_TINYUSB_MSC_MOUNT_PATH="/fatfs"
-# MSC buffer must be >= WL sector size (4096)
-CONFIG_TINYUSB_MSC_BUFSIZE=4096
+# Console on the native USB (ROM CDC): logs over the same cable that flashes, and esptool can
+# reset into the bootloader without holding BOOT.
+CONFIG_ESP_CONSOLE_USB_CDC=y
 
-# Long filename support so files appear in lowercase on the host
-CONFIG_FATFS_LFN_HEAP=y
-CONFIG_FATFS_MAX_LFN=63
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 
-# Enable f_setlabel() API for volume labeling
-CONFIG_FATFS_USE_LABEL=y
-
-# Main task needs enough stack for HTTP server + METAR fetch
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
-
-# Use custom CA bundle (Amazon Root CA 1 only) instead of full Mozilla bundle (~67KB savings)
-CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=n
-
-# Enable embedded PSRAM (ESP32-S2FNR2 has 2MB) so mbedTLS/FAT don't exhaust internal SRAM
+# QT Py ESP32-S2 (ESP32-S2FNR2) has 2MB PSRAM: TLS, web pages and the weather reply fit easily.
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_USE_MALLOC=y
 
-# Optimize for size (~10% binary reduction)
-CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+# TLS via the certificate bundle (firmware, config file, weather), not a pinned intermediate.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
 
+CONFIG_LWIP_LOCAL_HOSTNAME="metarmap"
+CONFIG_LWIP_IPV6=n
+
+# Long weather URLs (one code per airport)
+CONFIG_HTTPD_MAX_URI_LEN=512
+
+# OTA rollback: a new image must fetch weather once (ota_mark_valid_once) or the bootloader
+# returns to the previous one. Bootloader setting: needs a USB flash to take effect.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+CONFIG_ESP_HTTPS_OTA_ENABLE_PARTIAL_DOWNLOAD=y
+
+# Signed app images (RSA-3072, Secure Boot V2 scheme) WITHOUT hardware secure boot: the running
+# app refuses OTA images not signed with the same key. No eFuses burned; USB can still reflash.
+# signing-key.pem is not in git: make one with
+#   espsecure.py generate_signing_key --version 2 --scheme rsa3072 signing-key.pem
+# (or symlink yours here). CI builds without it: sdkconfig.ci.
+CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT=y
+CONFIG_SECURE_SIGNED_APPS_RSA_SCHEME=y
+CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT=y
+CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES=y
+CONFIG_SECURE_BOOT_SIGNING_KEY="signing-key.pem"
+
+# Crash dumps to flash (ELF; the only format in IDF 6); the next boot keeps a one-line summary (status page, /debug).
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=60
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
+# event loop runs the WiFi handler, which logs (and /log copies warnings)
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=3584
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y

@@ -2,49 +2,92 @@
 
 ## Build
 
-- Target: `idf.py set-target esp32s2` (default for this tree). ESP-IDF 5.5+.
-- Source ESP-IDF: `source $IDF_PATH/export.sh` then `idf.py build`.
-- `tmm_log.h` includes `<stdbool.h>` — required for `bool` in `tmm_log()` under `-std=gnu17`.
+- Target esp32s2 (QT Py ESP32-S2: 4MB flash, 2MB PSRAM, single core). ESP-IDF 5.5+, tested on 6.0.2.
+- `PROJECT_VER` comes from `FIRMWARE_VERSION` in `main/main.c` (CMakeLists.txt reads it). OTA
+  compares versions, so bump it for every release.
+- Test images (CMake cache options, they stick in the build dir): `-DTMM_ROLLBACK_TEST=1` aborts
+  at boot and must be rolled back (version `<v>-rbtest`); `-DTMM_VER_SUFFIX=-x`; `-DTMM_TX_DEFAULT=N`;
+  `-DTMM_TX_TEST=1` short autotune timers. Use a separate `-B build-xxx` dir for each.
+- With `TMM_S3` in the environment, each build uploads a changed image to `$TMM_S3/bin/beta.bin`
+  (`tools/ota_upload.sh`, skipped for test images and with `-DTMM_NO_UPLOAD=1`).
 
-## Flash / partitions
+## Partitions and boot
 
-- `sdkconfig.defaults`: 4MB flash; custom `partitions.csv` with `factory` ~1MB and `storage` FAT 512K.
-- Recent builds: app image is tight against the factory partition (~few % free). Before adding large features, enlarge `factory` in `partitions.csv` or trim code.
+- `partitions.csv`: NVS 24 KB, two 1.875 MB OTA slots, otadata, 64 KB core dump. No factory app.
+- Rollback (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`): a new image is marked valid after its first
+  good weather fetch; a crash or reset before that boots the previous slot, and the next boot
+  sets debug flag `OTA_ROLLED_BACK`. Bootloader setting: a board flashed before 0.5.0 needs one
+  USB flash to get it.
+- Signed apps without hardware secure boot (RSA-3072, V2 scheme): nothing burned in eFuses, USB
+  can always reflash. OTA accepts only images signed with the key of the running image (trust
+  comes from the running app's own signature block). `signing-pub.pem` is the public half.
 
-## Config and USB
+## OTA
 
-- FAT mount point: `/fatfs` (must match `CONFIG_TINYUSB_MSC_MOUNT_PATH` and code).
-- **TinyUSB MSC** exposes the same wear-levelled FAT to a PC. Firmware and USB host cannot use the volume simultaneously; when in USB mode, file-backed paths are skipped where `tmm_msc_is_usb_mode()` is checked.
-- Config files: `config.txt`, `airports.txt`, optional `errors.txt` on FAT.
+- Channels `<base>/stable.bin` and `<base>/beta.bin`; `ota_channel` picks one. Checks every
+  `ota_interval_minutes` (6 h): HEAD first and skip when the ETag is unchanged; otherwise read
+  only the image header (partial download, 32 KB ranges) and stop when the version matches.
+- Version differs (newer or older) → install, except a version that already rolled back on this
+  map. Promotion is a copy beta → stable (`tools/promote.py`).
+
+## Remote config
+
+- `<config base>/<boardid>.json`, checked 15 s after boot and every `config_interval_minutes`
+  (HEAD + ETag). Applied once per `rev`; the whole file is validated before anything changes.
+  Same apply path as the setup page (`cfg_apply_obj`). Keys: `../docs/config-options.md`.
+
+## NVS (namespace `tmm_cfg`)
+
+`ssid`/`pass`, `ssid1..2`/`pass1..2`, `airports` (one token per line, dark LEDs as `OFF`),
+`bri_idx`, `ota_ch`, `url_prefix`, `ota_int`, `cfg_int`, `cfg_rev`, `fw_base_url`,
+`cfg_base_url`, `admin_hash`, settings from `k_settings` (u16), night dimming (`nd_*`, `tz`),
+colors (`col_*`), `tx_auto` (learned TX level), `boots`, `crash`, `rb_seen`, bench-only
+`test_hooks` / `fb_sec`.
 
 ## Board ID (`boardid`)
 
-- Primary: first 6 bytes of `ESP_EFUSE_OPTIONAL_UNIQUE_ID` as 12 lowercase hex chars.
-- Fallback: WiFi STA MAC if eFuse read fails or is all zeros.
+First 6 bytes of `ESP_EFUSE_OPTIONAL_UNIQUE_ID` as 12 lowercase hex chars; the WiFi STA MAC if
+that is unreadable or zero. The setup network and hostname use the last 6 hex chars.
+
+## LEDs
+
+- `led_strip` over RMT. The S2 has 4 TX channels with 64 symbols each: the map strip takes two
+  blocks (128 symbols), the onboard status pixel one. `led_order` maps to the driver's color
+  component format; `RGBW`/`GRBW` send 4 bytes per LED with white 0.
+- The strip is always `LED_MAX` (200) pixels long, so LEDs past the airport list are driven off.
+  A frame is only sent when it changed, or once a second.
+- Onboard NeoPixel: data GPIO 39, power GPIO 38 (driven high at boot).
+- If the strip driver fails (bad `led_gpio`), debug flag `LED_INIT_FAIL` is set and the web
+  pages still work, so the setting can be fixed.
+
+## Tasks
+
+`led` (render, 6 KB), `poll` (weather, 8 KB), `ota` (8 KB), `cfg` (8 KB), `wdt` (stale-weather
+reboot, web server health), `btn` (BOOT button), `dns` (captive DNS in setup mode), `oled`
+(only when an OLED answers). The event loop task stack is raised to 3.5 KB because the WiFi
+handler logs and the `/log` hook copies warnings.
 
 ## Logging
 
-- Console lines use syslog-style prefix: `local0.<severity>:` (see `tmm_log.c`).
-- Optional append to `errors.txt` for selected severities when FAT is mounted and not in USB mode.
+- Console on the USB CDC port. `log_vprintf` passes everything through, and copies W/E lines
+  into a 6 KB PSRAM ring served at `/log`. It looks at the format string first (log v1 sends one
+  call per line, starting with the level letter) so only W/E lines are formatted twice.
+- Core dumps go to the `coredump` partition; the next boot stores a one-line summary (task, PC,
+  backtrace) in NVS `crash` and erases the dump. Decode the addresses with the ELF of that
+  version (`TMM_ELF_ARCHIVE` keeps one per uploaded build).
 
-## Display
+## Web pages
 
-- SSD1306 128×32, I2C: SDA GPIO7, SCL GPIO6 (`oled_ssd1306.h`). Verify on hardware if the panel is garbled (bit order / page layout).
+`/` status, `/airports` list with Find buttons, `/config` setup page, `/debug` flags and crash,
+`/log`. POST: `/save_wifi`, `/save_airports`, `/save_settings`, `/save_url`, `/save_channel`,
+`/save_admin`, `/bri_step`, `/clear_flags`, `/pattern`, `/radio_check`, `/action`. GET
+`/unlock` (lock state for the page). Bench units (`test_hooks=1`, USB only): `/test/button`,
+`/test/config`, `/test/check`, `/test/weather`.
 
-## Web UI (minimal)
+Saves need a same-site request (Origin/Referer naming this map; skipped in setup mode), and on
+the home network a BOOT press within the last 15 minutes.
 
-- Port 80 after WiFi: `/`, `/cfg` (SSID, password, airports), `/usb` (switch MSC app vs USB), `/debug`.
+## OLED
 
-## ESP32-S3 instead of S2
-
-Same codebase; no S2-only C defines in this project.
-
-1. `idf.py set-target esp32s3` and rebuild.
-2. **Pins:** NeoPixel is `LED_STRIP_GPIO` in `main.c` (17 on QT Py S2). OLED pins are `OLED_PIN_SDA` / `OLED_PIN_SCL` in `oled_ssd1306.h`. **Update both to match your S3 board** — Adafruit QT Py ESP32-S3 (and other boards) often differ from S2.
-3. **Flash size:** Many S3 modules are 8MB+. Set `CONFIG_ESPTOOLPY_FLASHSIZE_*` appropriately; adjust `partitions.csv` if you need a larger app or storage partition.
-4. TinyUSB MSC, efuse optional unique ID, and the rest apply to S3 the same way.
-
-## Optional follow-ups
-
-- URL-decode POST bodies for `/cfg` if passwords or airport lists contain `+` or `%xx`.
-- Re-run `idf.py build` after target changes so `dependencies.lock` matches the active chip.
+SSD1306 128×32 on I2C, SDA GPIO 7, SCL GPIO 6 (`oled_ssd1306.h`), three text lines refreshed
+every 2 s. Optional; probed at boot.

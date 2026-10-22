@@ -1,0 +1,6 @@
+# CI / anyone without the private signing key: build an unsigned image (compile check).
+# An unsigned image has no signature block, and OTA trusts the key in the running app's own
+# signature block, so a map running this build refuses all OTA updates until it is reflashed
+# with a signed release over USB.
+#   idf.py -B build-ci -DSDKCONFIG=build-ci/sdkconfig -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.ci" build
+CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES=n

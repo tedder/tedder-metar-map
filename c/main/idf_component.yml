@@ -1,5 +1,6 @@
-## Managed components (ESP-IDF component manager)
 dependencies:
-  espressif/led_strip: ^3.0.0
-  espressif/esp_tinyusb: ^2.0.0
-  espressif/mdns: '*'
+  espressif/led_strip: "^3.0"
+  espressif/cjson: "^1.7.19"
+  espressif/mdns: "^1.8"
+  idf:
+    version: ">=5.5"
