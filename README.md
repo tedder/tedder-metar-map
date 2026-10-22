@@ -2,91 +2,84 @@
 
 There are many like it, but this one's mine.
 
-Goals:
-- reasonably sane code
-- should run on a microcontroller (eg esp32)
-- can possibly run on a Pi
--  should be able to run it locally for testing, no need to upload to a microcontroller every time.
-- hopefully unit tests to catch regressions
-- configure in text files or in a web server.
-- easy for an end user to configure- this is why it uses text files vs toml or yaml or json.
-- not too many custom configurations. just a dead-simple.
-- 'phone home' so I can help friends with weird configurations
+A wall map with one LED per airport. Each LED shows the airport's flight category
+(VFR, MVFR, IFR, LIFR) from the current METAR. The controller is an
+[Adafruit QT Py ESP32-S2](https://www.adafruit.com/product/5325) running ESP-IDF
+firmware (`c/`). Weather comes from a small service (`fly.tedder.me/metar`) that
+fetches METARs for a list of airports and returns one CSV line per airport with the
+category and the LED color, so the device does no METAR parsing.
 
-Future:
-- use the light sensor on the carrier board
-- calculate/approximate the LED power consumption so it can run off USB power
-- fall back to 'wifi AP mode' on failed connect
-- OTA updates
-- regression tests in github actions
+The v1 hardware is about $25 ($10ish for the carrier board, $12 for the QT Py). It's
+simpler than a Pi, has less fussy power requirements, and is thin enough to wall-mount.
 
-The v1 hardware for this is about $25 ($10ish for the carrier board, $12 for the qtpy). It's simpler than a Pi, it doesn't have as fussy of power requirements as a Pi, and it's much thinner, making it easier to wall-mount.
+The original CircuitPython version has been removed. It's in the git history (last
+version at commit `6763be1`) if you need it.
 
-## how to build
+## Hardware
 
-## how to install
+| Part | Pin |
+|------|-----|
+| WS2812 LED string | GPIO 5 (up to 74 LEDs, set in `c/main/main.c`) |
+| SSD1306 OLED 128×32 (optional) | I2C, SDA GPIO 7 / SCL GPIO 6 |
 
-### bootstrap
+4MB flash, 2MB PSRAM (PSRAM is needed for TLS and the FAT filesystem to fit together).
 
-[Install circuitpython](https://learn.adafruit.com/adafruit-qt-py-esp32-s2/circuitpython) on [qtpy esp32-s2](https://www.adafruit.com/product/5325):
+## Build
 
-1. [download circuitpython uf2](https://circuitpython.org/board/adafruit_qtpy_esp32s2/) (10.0 or later required)
-1. press reset button
-1. when RGB LED turns purple, press reset button again (about a half second later? almost a double-click)
-1. note QTPYS2BOOT mounted folder on success
-1. copy latest circuitpython uf2 to this folder
-1. qtpy will auto-disconnect and remount as CIRCUITPY
-
-### install libraries
-
-Install [circup](https://github.com/adafruit/circup) if you don't have it:
-```
-pip install circup
-```
-
-Then install the required libraries:
-```
-circup install neopixel adafruit_requests adafruit_datetime adafruit_httpserver adafruit_ssd1306 adafruit_ntp adafruit_framebuf adafruit_pixelbuf adafruit_bus_device adafruit_connection_manager
-```
-
-### configure
-
-Copy `settings.toml.example` to `settings.toml` and fill in your WiFi credentials:
-```
-cp settings.toml.example /Volumes/CIRCUITPY/settings.toml
-```
-
-Create an `airports.txt` file on the device with one ICAO code per line, in LED order.
-Use `OFF` for unused LEDs, `OFF_LEGEND` for legend LEDs. See `airports.txt.ted` for an example.
-
-### deploy
+Needs [ESP-IDF](https://docs.espressif.com/projects/esp-idf/) 5.5 or later (builds on 6.0.2).
 
 ```
-cp code.py /Volumes/CIRCUITPY/code.py
+cd c
+idf.py set-target esp32s2
+idf.py build
 ```
 
-CircuitPython reloads automatically on file write.
+If `sdkconfig.defaults` changes, delete `sdkconfig` and rebuild.
 
+## Flash
 
+Put the QT Py in bootloader mode: hold BOOT while plugging in USB. Then:
 
+```
+idf.py -p /dev/cu.usbmodemXXXX flash
+```
 
+"Device not configured" at the very end of a flash is harmless; everything has been
+written by then.
 
-## troubleshooting
+## Configure
 
-[circuitpython boot states](https://docs.circuitpython.org/en/8.2.x/README.html#:~:text=RGB%20status%20LED%20indicating%20CircuitPython%20state.):
-* One green flash - code completed without error.
-* Two red flashes - code ended due to an exception.
-* Three yellow flashes - safe mode. May be due to CircuitPython internal error.
+Settings live in files on the device's FAT partition:
 
-mu editor, mode->circuitpython, serial, CTRL-D in lower window, watch output
+| File | Contents |
+|------|----------|
+| `config.txt` | `WIFI_SSID=...` and `WIFI_PASS=...` (see `c/config.txt.example`) |
+| `airports.txt` | one ICAO code per line, in LED order. `OFF`, `OFF_LEGEND` or `NULL` leave that LED dark. See `c/airports.txt.example`. |
+| `errors.txt` | log written by the firmware |
 
-## bricked device recovery
+Two ways to edit them:
 
-1. boot+reset button sequence
-1. serial should appear in the [web esptool](https://adafruit.github.io/Adafruit_WebSerial_ESPTool/)
-1. connect
-1. erase
-1. choose file, combined.bin, program
-1. once finished, press reset button
-1. green LED should appear, and QTPYS2BOOT dir
-1. cp qtpy python uf2, it'll end with an I/O error
+- **Web page:** `http://<device IP>/config` (WiFi and airports).
+- **USB drive:** on `http://<device IP>/usb`, switch storage to USB mode. The device
+  then shows up on the computer as a drive named METARMAP. Edit the files, eject,
+  and switch back to app mode (or reboot).
+
+## Web pages
+
+| Path | What |
+|------|------|
+| `/` | status: firmware version, board ID, fetch counts |
+| `/airports` | each LED: airport, category, report age |
+| `/config` | WiFi and airport list |
+| `/debug` | debug flags and last error |
+| `/log` | `errors.txt` |
+| `/usb` | switch storage between the firmware and USB |
+
+## Updates
+
+The firmware checks for a new build over HTTPS (`esp_https_ota`) every 8 weather
+fetches (about 72 minutes) and installs it if the version differs.
+
+## License
+
+MIT, see `LICENSE`.

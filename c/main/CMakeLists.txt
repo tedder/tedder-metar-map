@@ -1,0 +1,35 @@
+idf_component_register(
+    SRCS
+        "main.c"
+        "tmm_log.c"
+        "tmm_msc.c"
+        "oled_ssd1306.c"
+        "font5x7_glcd.c"
+    EMBED_TXTFILES
+        "certs/AmazonRootCA1.pem"
+    INCLUDE_DIRS "."
+    REQUIRES
+        esp_wifi
+        esp_netif
+        esp_event
+        nvs_flash
+        esp_timer
+        esp_http_client
+        esp_http_server
+        esp_driver_gpio
+        esp_driver_rmt
+        esp_driver_i2c
+        esp_lcd
+        led_strip
+        fatfs
+        wear_levelling
+        esp_partition
+        esp_https_ota
+        app_update
+        esp-tls
+        vfs
+        lwip
+        efuse
+        espressif__esp_tinyusb
+        espressif__led_strip
+        espressif__mdns)

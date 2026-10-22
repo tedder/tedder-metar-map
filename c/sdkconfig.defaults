@@ -1,0 +1,35 @@
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_OFFSET=0x8000
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# QT Py ESP32-S2 modules are typically 4MB; FAT + app need > 2MB total flash.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# TinyUSB MSC — same FAT volume as firmware (see tmm_msc.c); mount path must match FS_MOUNT_POINT in main.c
+CONFIG_TINYUSB_MSC_ENABLED=y
+CONFIG_TINYUSB_MSC_MOUNT_PATH="/fatfs"
+# MSC buffer must be >= WL sector size (4096)
+CONFIG_TINYUSB_MSC_BUFSIZE=4096
+
+# Long filename support so files appear in lowercase on the host
+CONFIG_FATFS_LFN_HEAP=y
+CONFIG_FATFS_MAX_LFN=63
+
+# Enable f_setlabel() API for volume labeling
+CONFIG_FATFS_USE_LABEL=y
+
+# Main task needs enough stack for HTTP server + METAR fetch
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+
+# Use custom CA bundle (Amazon Root CA 1 only) instead of full Mozilla bundle (~67KB savings)
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=n
+
+# Enable embedded PSRAM (ESP32-S2FNR2 has 2MB) so mbedTLS/FAT don't exhaust internal SRAM
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_USE_MALLOC=y
+
+# Optimize for size (~10% binary reduction)
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+

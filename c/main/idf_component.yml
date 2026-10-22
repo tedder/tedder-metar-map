@@ -1,0 +1,5 @@
+## Managed components (ESP-IDF component manager)
+dependencies:
+  espressif/led_strip: ^3.0.0
+  espressif/esp_tinyusb: ^2.0.0
+  espressif/mdns: '*'

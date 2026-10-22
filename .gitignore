@@ -1,5 +1,2 @@
-settings.toml
-boot_out.txt
-__pycache__/
-*.pyc
 .claude/settings.local.json
+.DS_Store

@@ -1,0 +1,8 @@
+# Name,   Type, SubType, Offset,  Size, Flags
+# FAT + wear levelling: use data,fat (not spiffs). Label must match esp_vfs_fat_spiflash_mount_rw_wl(..., "storage", ...).
+nvs,      data, nvs,     0x9000,  0x4000,
+otadata,  data, ota,     0xd000,  0x2000,
+phy_init, data, phy,     0xf000,  0x1000,
+ota_0,    app,  ota_0,   0x10000, 1088K,
+ota_1,    app,  ota_1,   ,        1088K,
+storage,  data, fat,     ,        512K,

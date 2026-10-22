@@ -1,3 +1,0 @@
-# don't leave these empty! it'll brick the device.
-CIRCUITPY_WIFI_SSID="nasa-iot-iot"
-CIRCUITPY_WIFI_PASSWORD="starnose"
