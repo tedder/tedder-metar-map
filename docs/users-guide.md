@@ -69,6 +69,7 @@ Brightness −/+, the LED tests and Find work without a press.
 - Brightness has nine steps: off, 3, 7, 15, 25, 40, 55, 75 and 100 %. New maps start at 25 %.
 - Night dimming is on by default: from 22:00 to 07:00 (Pacific time) the map drops to 3 %. Set
   the hours, the night brightness and your time zone on the Configure page, or turn it off.
+  At night, lights for airports with no current report (grey) are at half that brightness.
 - During the night, pressing − or + on the status page cancels dimming until the morning.
 
 ## Changing the airports

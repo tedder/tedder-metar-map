@@ -56,7 +56,7 @@
 #include "led_strip.h"
 #include "driver/gpio.h"
 
-#define FIRMWARE_VERSION    "0.5.1"
+#define FIRMWARE_VERSION    "0.5.2"
 
 /* LED string. The strip is always driven as LED_MAX pixels: LEDs past the airport list get
  * explicit zeros, so a longer strip than the list stays dark without a count setting. */
@@ -1452,7 +1452,7 @@ static void show(float bri)
     static int64_t last_ms;
     uint8_t out[LED_MAX][3];
     for (int i = 0; i < LED_MAX; i++)
-        for (int c = 0; c < 3; c++) out[i][c] = (uint8_t)(s_pixels[i][c] * bri);
+        for (int c = 0; c < 3; c++) out[i][c] = (uint8_t)(s_pixels[i][c] * bri + 0.5f);   /* round: keeps dim greys grey */
     if (!s_strip) return;
     if (!s_leds_dirty && memcmp(out, s_sent, sizeof(out)) == 0 && now_ms() - last_ms < 1000) return;
     for (int i = 0; i < LED_MAX; i++) {
@@ -1558,19 +1558,25 @@ static void render_pattern(void)
 }
 
 /** Weather: each LED its airport's color; dark LEDs off. local_stale: every airport LED shows
- *  the no-report color (our weather is too old to trust). Call with s_state_lock held. */
+ *  the no-report color (our weather is too old to trust). During night dimming no-report LEDs
+ *  are at half the night brightness, so the reporting airports stand out. Call with
+ *  s_state_lock held. */
 static void render_weather(bool local_stale)
 {
+    bool night = s_night_now && !s_night_override;
     for (int i = 0; i < s_slot_n; i++) {
         const slot_t *s = &s_slots[i];
         if (!s->icao[0]) continue;
         uint8_t r = NO_REPORT_R, g = NO_REPORT_G, b = NO_REPORT_B;
+        bool no_report = true;
         if (!local_stale && s->has) {
             r = s->r; g = s->g; b = s->b;
             color_override(s->cat, &r, &g, &b);
+            no_report = s->stale_remote || !s->cat[0];
         } else if (!local_stale) {
             r = g = b = 0;                    /* not in the reply (yet) */
         }
+        if (night && no_report) { r /= 2; g /= 2; b /= 2; }
         put(i, r, g, b);
     }
 }
