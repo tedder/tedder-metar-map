@@ -56,7 +56,7 @@
 #include "led_strip.h"
 #include "driver/gpio.h"
 
-#define FIRMWARE_VERSION    "0.5.0"
+#define FIRMWARE_VERSION    "0.5.1"
 
 /* LED string. The strip is always driven as LED_MAX pixels: LEDs past the airport list get
  * explicit zeros, so a longer strip than the list stays dark without a count setting. */
@@ -82,6 +82,9 @@
 #define DEFAULT_URL_PFX     "https://fly.tedder.me/metar?ids="
 #define DEFAULT_BRI_IDX     4                 /* 25 %; the 0.4 firmware ran at a fixed 20 % */
 #define BRIGHTNESS_LEVELS_INIT { 0.0f, 0.03f, 0.07f, 0.15f, 0.25f, 0.4f, 0.55f, 0.75f, 1.0f }  /* 0 = off */
+/* The weather service answers a cache miss for a long list in 1-10 s, sometimes over 15 s
+ * (CloudFront logs 2026-10-22, 47 airports); 0.4.x waited 30 s. */
+#define WEATHER_TIMEOUT_MS  30000
 #define AIRPORTS_MAX_TEXT   1600              /* NVS "airports": tokens joined by '\n' */
 
 /* Shown for an airport with no current report, and for every airport when our own weather is old
@@ -1371,7 +1374,7 @@ static void fetch_once(void)
         .url           = url,
         .event_handler = http_event_handler,
         .user_data     = &ctx,
-        .timeout_ms    = 15000,
+        .timeout_ms    = WEATHER_TIMEOUT_MS,
         .buffer_size_tx = 2048,
     };
     if (strncasecmp(url, "https://", 8) == 0)
@@ -3660,7 +3663,7 @@ static int metar_probe(const slot_t *slots, int n, char *missing, size_t msz)
     off = strlen(url);
     snprintf(url + off, URL_MAX - off, "&boardid=%s&output=csv&fw=%s&check=1", s_boardid, FIRMWARE_VERSION);
     esp_http_client_config_t cfg = {
-        .url = url, .event_handler = http_event_handler, .user_data = &ctx, .timeout_ms = 10000,
+        .url = url, .event_handler = http_event_handler, .user_data = &ctx, .timeout_ms = WEATHER_TIMEOUT_MS,
         .buffer_size_tx = 2048,
     };
     if (strncasecmp(url, "https://", 8) == 0) cfg.crt_bundle_attach = esp_crt_bundle_attach;
@@ -4523,8 +4526,8 @@ static void crash_summary_take(void)
     esp_core_dump_summary_t *cs = malloc(sizeof(*cs));
     if (cs && esp_core_dump_get_summary(cs) == ESP_OK) {
         const esp_app_desc_t *app = esp_app_get_description();
-        size_t o = (size_t)snprintf(s_crash, sizeof(s_crash), "boot %lu (before v%s): task %.16s pc 0x%08lx bt",
-                                    (unsigned long)s_boot_count, app->version, cs->exc_task,
+        size_t o = (size_t)snprintf(s_crash, sizeof(s_crash), "v%s, found at boot %lu: task %.16s pc 0x%08lx bt",
+                                    app->version, (unsigned long)s_boot_count, cs->exc_task,
                                     (unsigned long)cs->exc_pc);
         for (uint32_t i = 0; i < cs->exc_bt_info.depth && i < 6 && o + 12 < sizeof(s_crash); i++)
             o += (size_t)snprintf(s_crash + o, sizeof(s_crash) - o, " 0x%08lx", (unsigned long)cs->exc_bt_info.bt[i]);

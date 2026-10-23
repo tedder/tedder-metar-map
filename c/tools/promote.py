@@ -48,7 +48,7 @@ def signed_ok(path):
            f"python -m espsecure verify-signature --version 2 --keyfile {shlex.quote(E.PUB_KEY)} {shlex.quote(path)}")
     r = subprocess.run(["bash", "-c", cmd], text=True, capture_output=True)
     lines = (r.stdout + r.stderr).strip().splitlines()
-    pick = [x for x in lines if "verified" in x.lower()] if r.returncode == 0 else lines[-1:]
+    pick = [x for x in lines if "verif" in x.lower() and "success" in x.lower()] if r.returncode == 0 else lines[-1:]
     return r.returncode == 0, pick[:1] or [""]
 
 
