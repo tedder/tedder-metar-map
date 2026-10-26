@@ -56,7 +56,7 @@
 #include "led_strip.h"
 #include "driver/gpio.h"
 
-#define FIRMWARE_VERSION    "0.5.3"
+#define FIRMWARE_VERSION    "0.5.4"
 
 /* LED string. The strip is always driven as LED_MAX pixels: LEDs past the airport list get
  * explicit zeros, so a longer strip than the list stays dark without a count setting. */
@@ -837,6 +837,28 @@ static void appendf(char *buf, size_t sz, size_t *off, const char *fmt, ...)
     int n = vsnprintf(buf + *off, sz - *off, fmt, ap);
     va_end(ap);
     if (n > 0) *off = (*off + (size_t)n < sz) ? *off + (size_t)n : sz - 1;
+}
+
+/** No-report brightness rows (day, night) with -/+ steppers; no unlock needed (handler_nr_step).
+ *  config: on the Configure page (data-keep so the save lock leaves the buttons alone). */
+static void nr_rows(char *buf, size_t sz, size_t *off, bool config)
+{
+    static const char *const which[] = { "day", "night" };
+    static const char *const label[] = { "No report, day", "No report, night" };
+    int v[2] = { s_nr_day_pct, s_nr_night_pct };
+    const char *keep = config ? " data-keep=1" : "";
+    const char *back = config ? "<input type=hidden name=back value=config>" : "";
+    for (int k = 0; k < 2; k++)
+        appendf(buf, sz, off,
+                "<tr><td>%s</td><td><div class=step>"
+                "<form action='/nr_step' method='POST'><input type=hidden name=which value=%s>"
+                "<input type=hidden name=dir value=down>%s<button%s%s aria-label='dimmer'>&minus;</button></form>"
+                "<b>%d %%</b>"
+                "<form action='/nr_step' method='POST'><input type=hidden name=which value=%s>"
+                "<input type=hidden name=dir value=up>%s<button%s%s aria-label='brighter'>+</button></form>"
+                "</div></td></tr>",
+                label[k], which[k], back, v[k] <= 0 ? " disabled" : "", keep, v[k],
+                which[k], back, v[k] >= 100 ? " disabled" : "", keep);
 }
 
 /** Status page: one table row per setting; values changed from the default in bold. */
@@ -2822,11 +2844,12 @@ static esp_err_t handler_root(httpd_req_t *req)
             "<button%s aria-label='dimmer'>&minus;</button></form> "
             "<b>%s</b> "
             "<form action='/bri_step' method='POST'><input type='hidden' name='dir' value='up'>"
-            "<button%s aria-label='brighter'>+</button></form>%s</td></tr>"
-            "<tr><td>LED test</td><td>",
+            "<button%s aria-label='brighter'>+</button></form>%s</td></tr>",
             ledw, s_bri_idx == 0 ? " disabled" : "", bri_label(s_bri_idx),
             s_bri_idx == 8 ? " disabled" : "",
             bri_effective() != s_bri_idx ? " — night dimming now (+ or &minus; cancels it until morning)" : "");
+    nr_rows(h, cap, &o, false);
+    appendf(h, cap, &o, "<tr><td>LED test</td><td>");
     static const char *const pat[][2] = { { "colors", "Colors" }, { "order", "Order" },
                                           { "categories", "Categories" } };
     for (int k = 0; k < 3; k++)
@@ -3417,19 +3440,19 @@ static esp_err_t handler_config(httpd_req_t *req)
     if (s_tz[0] && !tz_known) appendf(h, cap, &o, "<option value='%s' selected>%s</option>", s_tz, s_tz);
     appendf(h, cap, &o,
             "</select></div></div></fieldset></div>"
-            "<h3>Airports with no report</h3><div class=sb>"
-            "<div class=note>Brightness of the grey no-report lights, as a percent of the map brightness. "
-            "Lower it so the reporting airports stand out; 0 turns them off.</div>"
-            "<div class=row><div><label class=f for=nrd>Daytime (%%)</label>"
-            "<input id=nrd type=number name=no_report_day_percent min=0 max=100 value='%d'></div>"
-            "<div><label class=f for=nrn>During night dimming (%%)</label>"
-            "<input id=nrn type=number name=no_report_night_percent min=0 max=100 value='%d'></div></div></div>"
             "<h3>Status light</h3><div class=sb>"
             "<label class=check><input type=checkbox name=status_pixel value=true%s><span>Use the small light on "
             "the controller board<small>Slow green breathing = all good, amber = weather is old or no WiFi. "
             "Setup mode and button presses always show.</small></span></label></div>"
             "<button>Save map settings</button></form></details>",
-            s_nr_day_pct, s_nr_night_pct, chk(s_status_pixel));
+            chk(s_status_pixel));
+
+    /* No-report brightness: -/+ like the status page brightness, no BOOT press needed */
+    appendf(h, cap, &o, "<div class=card><h2>Airports with no report</h2><table>");
+    nr_rows(h, cap, &o, true);
+    appendf(h, cap, &o, "</table><div class=note>Brightness of the grey no-report lights, as a percent of "
+                        "the map brightness; night is during night dimming. Lower it so the reporting "
+                        "airports stand out; 0 turns them off. Saved right away, no button press needed.</div></div>");
 
     /* Danger zone: WiFi */
     appendf(h, cap, &o,
@@ -3949,6 +3972,35 @@ static esp_err_t handler_bri_step(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* -/+ for no_report_day_percent / no_report_night_percent in 10 % steps: same-site check only
+   (like brightness), saved right away. */
+static esp_err_t handler_nr_step(httpd_req_t *req)
+{
+    if (!save_allowed(req, false)) return ESP_OK;
+    char body[64], which[8] = "", dir[8] = "", back[8] = "";
+    read_body(req, body, sizeof(body));
+    get_param(body, "which", which, sizeof(which));
+    get_param(body, "dir", dir, sizeof(dir));
+    get_param(body, "back", back, sizeof(back));
+    int step = strcmp(dir, "up") == 0 ? 10 : strcmp(dir, "down") == 0 ? -10 : 0;
+    const char *key = strcmp(which, "day") == 0 ? "no_report_day_percent" :
+                      strcmp(which, "night") == 0 ? "no_report_night_percent" : NULL;
+    if (!step || !key) {
+        send_page(req, HTTPD_400, "No-report brightness", "<p>Use which = day or night, dir = up or down.</p>");
+        return ESP_OK;
+    }
+    const setting_t *st = setting_by_key(key);
+    int v = (*st->val + step) / 10 * 10;           /* back onto the 10 % grid */
+    if (v < st->lo) v = st->lo;
+    if (v > st->hi) v = st->hi;
+    bool rb = false;
+    setting_apply(st, v, &rb);
+    httpd_resp_set_status(req, "303 See Other");
+    httpd_resp_set_hdr(req, "Location", strcmp(back, "config") == 0 ? "/config" : "/");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
 static esp_err_t handler_pattern(httpd_req_t *req)
 {
     if (!save_allowed(req, false)) return ESP_OK;
@@ -4291,7 +4343,7 @@ static void start_webserver(void)
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     /* Root page locals now <3K + malloc'd HTML; chunk send uses small stack per syscall */
     cfg.stack_size = 12288;
-    cfg.max_uri_handlers = 26;    /* 22 registered; default 8 is too few */
+    cfg.max_uri_handlers = 26;    /* 23 registered; default 8 is too few */
     cfg.lru_purge_enable = true;  /* captive-portal phones open many sockets */
 
     if (httpd_start(&s_httpd, &cfg) != ESP_OK) {
@@ -4311,6 +4363,7 @@ static void start_webserver(void)
         { .uri = "/log",          .method = HTTP_GET,  .handler = handler_log },
         { .uri = "/save_url",     .method = HTTP_POST, .handler = handler_save_url },
         { .uri = "/bri_step",        .method = HTTP_POST, .handler = handler_bri_step },
+        { .uri = "/nr_step",         .method = HTTP_POST, .handler = handler_nr_step },
         { .uri = "/clear_flags",     .method = HTTP_POST, .handler = handler_clear_flags },
         { .uri = "/save_channel",    .method = HTTP_POST, .handler = handler_save_channel },
         { .uri = "/test/button",     .method = HTTP_POST, .handler = handler_test_button },

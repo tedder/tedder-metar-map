@@ -58,7 +58,7 @@ Each is optional; `null` goes back to the default (and removes it from NVS). NVS
 | `status_pixel` | `status_pix` | `true` | `true`/`false` | onboard status light (setup, unlock and button colors show either way) |
 | `verbose_telemetry` | `verbose_tel` | `true` | `true`/`false` | `false` leaves `t=` and `localip=` out of weather requests |
 | `no_report_day_percent` | `nr_day_pct` | `100` | 0–100 | brightness of no-report (grey) airport LEDs, percent of the map brightness, outside night dimming; 0 = off |
-| `no_report_night_percent` | `nr_night_pct` | `50` | 0–100 | the same during night dimming |
+| `no_report_night_percent` | `nr_night_pct` | `50` | 0–100 | the same during night dimming. Both also have −/+ (10 % steps, no BOOT press) on the status and Configure pages |
 | `wifi_tx_power_dbm` | `tx_dbm` | `17` | 8–17 | WiFi transmit power cap. Unset, the map steps down (3 dB per step, floor 8) after strong-signal join timeouts and remembers the level that worked; setting it turns that off |
 
 ### LED hardware (applied after a reboot)
