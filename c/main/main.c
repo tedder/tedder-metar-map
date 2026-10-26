@@ -56,7 +56,7 @@
 #include "led_strip.h"
 #include "driver/gpio.h"
 
-#define FIRMWARE_VERSION    "0.5.2"
+#define FIRMWARE_VERSION    "0.5.3"
 
 /* LED string. The strip is always driven as LED_MAX pixels: LEDs past the airport list get
  * explicit zeros, so a longer strip than the list stays dark without a count setting. */
@@ -276,6 +276,8 @@ static bool              s_fb_sec_test;     /* fb_sec (test hooks) overrides wif
 /* Tunable settings (k_settings below). LED hardware ones are read once at boot. */
 static volatile int      s_poll_sec = 300, s_fb_min = 5, s_stale_min = 60, s_stale_reboot_h = 12;
 static volatile int      s_status_pixel = 1, s_verbose_tel = 1;
+/* No-report (grey) airport LEDs, percent of the map brightness by day and during night dimming */
+static volatile int      s_nr_day_pct = 100, s_nr_night_pct = 50;
 /* WiFi max TX power in dBm (8..17). The autotune lowers it when the network stops answering
  * (main/tx_tune.c). TMM_TX_DEFAULT is a test-build knob (CMakeLists.txt). */
 #ifndef TMM_TX_DEFAULT
@@ -532,6 +534,8 @@ static const setting_t k_settings[] = {
     { "metar_stale_reboot_hours",    "stale_rb_hr", SET_INT,  1,  48,    12,   NULL, false, &s_stale_reboot_h },
     { "status_pixel",                "status_pix",  SET_BOOL, 0,  1,     1,    NULL, false, &s_status_pixel },
     { "verbose_telemetry",           "verbose_tel", SET_BOOL, 0,  1,     1,    NULL, false, &s_verbose_tel },
+    { "no_report_day_percent",       "nr_day_pct",  SET_INT,  0,  100,   100,  NULL, false, &s_nr_day_pct },
+    { "no_report_night_percent",     "nr_night_pct", SET_INT, 0,  100,   50,   NULL, false, &s_nr_night_pct },
     { "wifi_tx_power_dbm",           "tx_dbm",      SET_INT,  8,  17,    TMM_TX_DEFAULT, NULL, false, &s_tx_dbm },
     { "led_order",                   "led_order",   SET_ENUM, 0,  7,     0,    k_led_order_opts, true, &s_led_order },
     { "led_model",                   "led_model",   SET_ENUM, 0,  2,     0,    k_led_model_opts, true, &s_led_model },
@@ -1558,12 +1562,13 @@ static void render_pattern(void)
 }
 
 /** Weather: each LED its airport's color; dark LEDs off. local_stale: every airport LED shows
- *  the no-report color (our weather is too old to trust). During night dimming no-report LEDs
- *  are at half the night brightness, so the reporting airports stand out. Call with
- *  s_state_lock held. */
+ *  the no-report color (our weather is too old to trust). No-report LEDs are scaled by
+ *  no_report_day_percent / no_report_night_percent (night = during night dimming), so the
+ *  reporting airports can stand out. Call with s_state_lock held. */
 static void render_weather(bool local_stale)
 {
     bool night = s_night_now && !s_night_override;
+    int  nr_pct = night ? s_nr_night_pct : s_nr_day_pct;
     for (int i = 0; i < s_slot_n; i++) {
         const slot_t *s = &s_slots[i];
         if (!s->icao[0]) continue;
@@ -1576,7 +1581,11 @@ static void render_weather(bool local_stale)
         } else if (!local_stale) {
             r = g = b = 0;                    /* not in the reply (yet) */
         }
-        if (night && no_report) { r /= 2; g /= 2; b /= 2; }
+        if (no_report && nr_pct < 100) {
+            r = (uint8_t)((r * nr_pct + 50) / 100);
+            g = (uint8_t)((g * nr_pct + 50) / 100);
+            b = (uint8_t)((b * nr_pct + 50) / 100);
+        }
         put(i, r, g, b);
     }
 }
@@ -2587,6 +2596,8 @@ static const char k_root_css[] =
     "input[type=checkbox],input[type=radio]{width:auto;margin:3px 6px 0 0}"
     "form.blk{display:block}form.blk button{margin-top:8px}"
     "button:disabled{opacity:.6;cursor:not-allowed}"
+    ".sv{background:#1f8a3b;color:#fff;border:2px solid #1f8a3b;border-radius:5px}"
+    ".sv:disabled{background:var(--subbg);color:var(--dim);border-color:#c33;opacity:1}"
     ".lk{border:2px solid #c33;background:#c3333318}.ok{border:2px solid #2a2;background:#22aa2218}"
     ".danger{border:2px solid #c80;background:#ffb30014}.danger h2{color:#c60}"
     ".on{color:#d33;font-weight:bold}"
@@ -3406,12 +3417,19 @@ static esp_err_t handler_config(httpd_req_t *req)
     if (s_tz[0] && !tz_known) appendf(h, cap, &o, "<option value='%s' selected>%s</option>", s_tz, s_tz);
     appendf(h, cap, &o,
             "</select></div></div></fieldset></div>"
+            "<h3>Airports with no report</h3><div class=sb>"
+            "<div class=note>Brightness of the grey no-report lights, as a percent of the map brightness. "
+            "Lower it so the reporting airports stand out; 0 turns them off.</div>"
+            "<div class=row><div><label class=f for=nrd>Daytime (%%)</label>"
+            "<input id=nrd type=number name=no_report_day_percent min=0 max=100 value='%d'></div>"
+            "<div><label class=f for=nrn>During night dimming (%%)</label>"
+            "<input id=nrn type=number name=no_report_night_percent min=0 max=100 value='%d'></div></div></div>"
             "<h3>Status light</h3><div class=sb>"
             "<label class=check><input type=checkbox name=status_pixel value=true%s><span>Use the small light on "
             "the controller board<small>Slow green breathing = all good, amber = weather is old or no WiFi. "
             "Setup mode and button presses always show.</small></span></label></div>"
             "<button>Save map settings</button></form></details>",
-            chk(s_status_pixel));
+            s_nr_day_pct, s_nr_night_pct, chk(s_status_pixel));
 
     /* Danger zone: WiFi */
     appendf(h, cap, &o,
@@ -3519,7 +3537,7 @@ static esp_err_t handler_config(httpd_req_t *req)
             "<form action='/action' method='POST'><input type=hidden name=what value=reboot><button>Restart</button></form>"
             "<button type=button id=rst>Reset settings to defaults&hellip;</button>"
             "<div class=confirm id=rstc hidden>Puts every map setting back to its default (night dimming, "
-            "status light, timing, LED string, telemetry, colors). WiFi, airport list, "
+            "status light, no-report brightness, timing, LED string, telemetry, colors). WiFi, airport list, "
             "brightness and update channel are kept. The map restarts."
             "<div><form action='/action' method='POST'><input type=hidden name=what value=reset>"
             "<button>Reset settings</button></form><button type=button id=rstn>Cancel</button></div></div></div>");
@@ -3529,6 +3547,7 @@ static esp_err_t handler_config(httpd_req_t *req)
             "<script>"
             "var L=document.getElementById('lock');"
             "function btns(on){document.querySelectorAll('form button').forEach(function(b){if(b.dataset.keep)return;b.disabled=!on;"
+            "if(/save_/.test(b.form.getAttribute('action')))b.classList.add('sv');"
             "b.title=on?'':'Press the BOOT button on the controller board once to enable saving.';"
             "var n=b.nextElementSibling,h=n&&n.className=='lh';if(!on&&!h){n=document.createElement('small');n.className='lh';"
             "n.textContent='Press the BOOT button on the controller board once to enable saving.';b.after(n);}else if(on&&h)n.remove();});}"
@@ -3539,7 +3558,7 @@ static esp_err_t handler_config(httpd_req_t *req)
             "if(j.unlocked){var s=j.remaining_s;L.className='card ok';"
             "L.innerHTML='<b>Unlocked.</b> Saving allowed for '+Math.floor(s/60)+':'+('0'+s%%60).slice(-2)+'.';}"
             "else{L.className='card lk';L.innerHTML='<b>Press the BOOT button on the controller board once</b> to "
-            "unlock saving for 15 minutes. The Save buttons stay grey until then.';}"
+            "unlock saving for 15 minutes. Until then the Save buttons are grey with a red outline; they turn green when unlocked.';}"
             "}).catch(function(){});}"
             "u();setInterval(u,2000);"
             "function tie(c,f){var a=document.getElementById(c),b=document.getElementById(f);"

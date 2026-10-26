@@ -57,6 +57,8 @@ Each is optional; `null` goes back to the default (and removes it from NVS). NVS
 | `metar_stale_reboot_hours` | `stale_rb_hr` | `12` | 1–48 | hours without fresh weather before a self-reboot (not with an empty airport list) |
 | `status_pixel` | `status_pix` | `true` | `true`/`false` | onboard status light (setup, unlock and button colors show either way) |
 | `verbose_telemetry` | `verbose_tel` | `true` | `true`/`false` | `false` leaves `t=` and `localip=` out of weather requests |
+| `no_report_day_percent` | `nr_day_pct` | `100` | 0–100 | brightness of no-report (grey) airport LEDs, percent of the map brightness, outside night dimming; 0 = off |
+| `no_report_night_percent` | `nr_night_pct` | `50` | 0–100 | the same during night dimming |
 | `wifi_tx_power_dbm` | `tx_dbm` | `17` | 8–17 | WiFi transmit power cap. Unset, the map steps down (3 dB per step, floor 8) after strong-signal join timeouts and remembers the level that worked; setting it turns that off |
 
 ### LED hardware (applied after a reboot)
@@ -83,8 +85,9 @@ test (below): **Colors** must show red, green, blue, white in that order (wrong 
 - Between `start` and `end` (local time, may cross midnight) the brightness is `brightness`
   (0–8; 0 = off). `false` turns night dimming off; `null` goes back to the default.
 - Default: on, 22:00–07:00, brightness 1 (3 %), Pacific time.
-- While dimming is on, airports with no current report (dim grey) are at half the night
-  brightness, so the reporting airports stand out.
+- While dimming is on, airports with no current report (dim grey) are at
+  `no_report_night_percent` of the night brightness (default 50 %), so the reporting airports
+  stand out.
 - `tz` is a POSIX TZ string (no spaces, under 48 chars). Pacific `PST8PDT,M3.2.0,M11.1.0`,
   Mountain `MST7MDT,M3.2.0,M11.1.0`, Arizona `MST7`, Central `CST6CDT,M3.2.0,M11.1.0`, Eastern
   `EST5EDT,M3.2.0,M11.1.0`, UTC `UTC0`.

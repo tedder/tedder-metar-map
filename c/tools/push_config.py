@@ -38,7 +38,8 @@ FORCED = {"wifi_primary", "firmware_base_url", "config_base_url"}
 # Same ranges as the firmware (cfg_apply_text, k_settings). (kind, lo, hi) or (kind, options).
 INT = {"brightness": (0, 8), "ota_interval_minutes": (15, 1440), "config_interval_minutes": (5, 1440),
        "metar_poll_seconds": (60, 3600), "wifi_fallback_minutes": (1, 120), "metar_stale_minutes": (10, 1440),
-       "metar_stale_reboot_hours": (1, 48), "wifi_tx_power_dbm": (8, 17), "led_gpio": (0, 46)}
+       "metar_stale_reboot_hours": (1, 48), "wifi_tx_power_dbm": (8, 17), "led_gpio": (0, 46),
+       "no_report_day_percent": (0, 100), "no_report_night_percent": (0, 100)}
 BOOL = {"status_pixel", "verbose_telemetry", "clear_flags", "ota_now", "reboot", "force"}
 ENUM = {"led_order": E.LED_ORDERS, "led_model": E.LED_MODELS, "ota_channel": ["stable", "beta", ""]}
 RESETTABLE = set(INT) - {"brightness", "ota_interval_minutes", "config_interval_minutes"} | \

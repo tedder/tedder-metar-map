@@ -70,6 +70,8 @@ Brightness −/+, the LED tests and Find work without a press.
 - Night dimming is on by default: from 22:00 to 07:00 (Pacific time) the map drops to 3 %. Set
   the hours, the night brightness and your time zone on the Configure page, or turn it off.
   At night, lights for airports with no current report (grey) are at half that brightness.
+  Configure → Map behavior → "Airports with no report" sets that percent, and a separate one for
+  daytime (100 % by default), so the grey lights can be dimmer than the rest or off.
 - During the night, pressing − or + on the status page cancels dimming until the morning.
 
 ## Changing the airports
