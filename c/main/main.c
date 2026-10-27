@@ -56,7 +56,7 @@
 #include "led_strip.h"
 #include "driver/gpio.h"
 
-#define FIRMWARE_VERSION    "0.5.4"
+#define FIRMWARE_VERSION    "0.5.5"
 
 /* LED string. The strip is always driven as LED_MAX pixels: LEDs past the airport list get
  * explicit zeros, so a longer strip than the list stays dark without a count setting. */
@@ -277,7 +277,7 @@ static bool              s_fb_sec_test;     /* fb_sec (test hooks) overrides wif
 static volatile int      s_poll_sec = 300, s_fb_min = 5, s_stale_min = 60, s_stale_reboot_h = 12;
 static volatile int      s_status_pixel = 1, s_verbose_tel = 1;
 /* No-report (grey) airport LEDs, percent of the map brightness by day and during night dimming */
-static volatile int      s_nr_day_pct = 100, s_nr_night_pct = 50;
+static volatile int      s_nr_day_pct = 30, s_nr_night_pct = 10;
 /* WiFi max TX power in dBm (8..17). The autotune lowers it when the network stops answering
  * (main/tx_tune.c). TMM_TX_DEFAULT is a test-build knob (CMakeLists.txt). */
 #ifndef TMM_TX_DEFAULT
@@ -534,8 +534,8 @@ static const setting_t k_settings[] = {
     { "metar_stale_reboot_hours",    "stale_rb_hr", SET_INT,  1,  48,    12,   NULL, false, &s_stale_reboot_h },
     { "status_pixel",                "status_pix",  SET_BOOL, 0,  1,     1,    NULL, false, &s_status_pixel },
     { "verbose_telemetry",           "verbose_tel", SET_BOOL, 0,  1,     1,    NULL, false, &s_verbose_tel },
-    { "no_report_day_percent",       "nr_day_pct",  SET_INT,  0,  100,   100,  NULL, false, &s_nr_day_pct },
-    { "no_report_night_percent",     "nr_night_pct", SET_INT, 0,  100,   50,   NULL, false, &s_nr_night_pct },
+    { "no_report_day_percent",       "nr_day_pct",  SET_INT,  0,  100,   30,   NULL, false, &s_nr_day_pct },
+    { "no_report_night_percent",     "nr_night_pct", SET_INT, 0,  100,   10,   NULL, false, &s_nr_night_pct },
     { "wifi_tx_power_dbm",           "tx_dbm",      SET_INT,  8,  17,    TMM_TX_DEFAULT, NULL, false, &s_tx_dbm },
     { "led_order",                   "led_order",   SET_ENUM, 0,  7,     0,    k_led_order_opts, true, &s_led_order },
     { "led_model",                   "led_model",   SET_ENUM, 0,  2,     0,    k_led_model_opts, true, &s_led_model },

@@ -2,6 +2,11 @@
 
 Firmware versions (`FIRMWARE_VERSION` in `c/main/main.c`). Newest first.
 
+## 0.5.5 (2026-10-27)
+- New defaults for the grey no-report airport LEDs: `no_report_day_percent` 30 (was 100) and
+  `no_report_night_percent` 10 (was 50). Map brightness stays 25 %. A map whose values were set by
+  hand (−/+ or a config file) keeps them.
+
 ## 0.5.4 (2026-10-26)
 - No-report brightness (day and night) has −/+ buttons in 10 % steps on the status page and on
   the Configure page, like map brightness. They save right away without a BOOT press (`POST
